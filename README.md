@@ -21,3 +21,4 @@ A proper project structure for the ATUL personal productivity playground.
 ## Going live
 
 The next stage is GitHub + Vercel + Supabase. Do not put passwords or private API keys in chat.
+Deployment sync check.
