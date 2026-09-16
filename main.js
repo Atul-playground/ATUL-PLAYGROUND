@@ -125,7 +125,7 @@ function render() {
           ['posts', 'Posts'],
           ['tools', 'Tools']
         ].map(([x, label], i) => `
-          <button class="navbtn ${i === 0 ? 'active' : ''}" data-view="${x}">${label}</button>
+          <button class="navbtn ${x === currentView ? 'active' : ''}" data-view="${x}">${label}</button>
         `).join('')}
       </nav>
 
@@ -334,6 +334,7 @@ function subscribeToCloud() {
 
 
 function switchView(view) {
+  currentView = view;
   document.querySelectorAll('.navbtn').forEach(x => {
     x.classList.toggle('active', x.dataset.view === view);
   });
