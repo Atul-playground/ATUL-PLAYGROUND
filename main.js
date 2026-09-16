@@ -350,6 +350,8 @@ async function loadCloud(initial = false) {
   }
   if (initial) {
     render();
+    wire();
+    wireWaterReminder();
   } else {
     updateVisibleCloudUI();
   }
@@ -636,6 +638,8 @@ function remindWaterNow() {
 }
 
 function startWaterReminderSystem() {
+  if (window.__atulWaterReminderStarted) return;
+  window.__atulWaterReminderStarted = true;
   const maybeRemind = () => {
     const { data } = getWaterState();
     if (data.ml >= 4000) {
@@ -651,11 +655,16 @@ function startWaterReminderSystem() {
 }
 
 function wireWaterReminder() {
-  document.getElementById('water250')?.addEventListener('click', () => addWater(250));
-  document.getElementById('water500')?.addEventListener('click', () => addWater(500));
-  document.getElementById('water1000')?.addEventListener('click', () => addWater(1000));
-  document.getElementById('waterClose')?.addEventListener('click', () => setWaterGlow(false));
-  document.getElementById('waterClose2')?.addEventListener('click', () => setWaterGlow(false));
+  const b250 = document.getElementById('water250');
+  const b500 = document.getElementById('water500');
+  const b1000 = document.getElementById('water1000');
+  const close = document.getElementById('waterClose');
+  const close2 = document.getElementById('waterClose2');
+  if (b250) b250.onclick = () => addWater(250);
+  if (b500) b500.onclick = () => addWater(500);
+  if (b1000) b1000.onclick = () => addWater(1000);
+  if (close) close.onclick = () => setWaterGlow(false);
+  if (close2) close2.onclick = () => setWaterGlow(false);
   updateWaterPopup();
   startWaterReminderSystem();
 }
