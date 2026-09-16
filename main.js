@@ -1,35 +1,44 @@
 import './style.css';
+import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+
+const SUPABASE_URL = 'https://ojnoeeheodakhwqzteaa.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_n55zrEeKX0fe0WPAWuCRZg_zN-fc5uX';
+const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, { auth: { persistSession: false } });
 
 const KEY = 'atul_playground_v4';
-const TARGET = 12 * 60;
+const DEFAULT_TARGET = 12 * 60;
 
-const pad = n => String(n).padStart(2, '0');
-const localDateKey = (date = new Date()) =>
-  `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+const today = () => {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
 
 const tomorrow = () => {
   const d = new Date();
   d.setDate(d.getDate() + 1);
-  return localDateKey(d);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 };
 
 const fmt = mins => `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, '0')}m`;
 
 const DEFAULT_BLOCKS = [
-  ['05:30–08:00', 'Focus block'],
-  ['08:00–08:30', 'Breakfast / reset'],
-  ['08:30–11:00', 'Focus block'],
-  ['11:00–11:30', 'Break'],
-  ['11:30–13:30', 'Focus block'],
-  ['13:30–14:00', 'Lunch'],
-  ['14:00–17:00', 'Sleep / recovery'],
-  ['17:30–20:00', 'Focus block'],
-  ['20:00–20:30', 'Dinner / break'],
-  ['20:30–23:00', 'Focus block']
+  { time: '05:30–08:00', title: 'Focus block', done: false },
+  { time: '08:00–08:30', title: 'Breakfast / reset', done: false },
+  { time: '08:30–11:00', title: 'Focus block', done: false },
+  { time: '11:00–11:30', title: 'Break', done: false },
+  { time: '11:30–13:30', title: 'Focus block', done: false },
+  { time: '13:30–14:00', title: 'Lunch', done: false },
+  { time: '14:00–17:00', title: 'Sleep / recovery', done: false },
+  { time: '17:30–20:00', title: 'Focus block', done: false },
+  { time: '20:00–20:30', title: 'Dinner / break', done: false },
+  { time: '20:30–23:00', title: 'Focus block', done: false }
 ];
-
-const makeDefaultBlocks = () =>
-  DEFAULT_BLOCKS.map(([time, title]) => ({ time, title, done: false }));
 
 let state = JSON.parse(localStorage.getItem(KEY) || 'null') || {
   days: {},
@@ -39,149 +48,67 @@ let state = JSON.parse(localStorage.getItem(KEY) || 'null') || {
 };
 
 let timer = { running: false, seconds: 0, startedAt: null };
-let selectedScheduleDate = localDateKey();
-
-const app = document.querySelector('#app');
+let cloud = { progress: null, posts: [], ready: false };
 
 const save = () => localStorage.setItem(KEY, JSON.stringify(state));
 
-const day = date => {
-  const key = date || localDateKey();
-  if (!state.days[key]) state.days[key] = { focus: 0, sessions: 0 };
+const day = () => {
+  const key = today();
+  state.days[key] ||= { focus: 0, sessions: 0 };
   return state.days[key];
 };
 
-function getPlan(date) {
-  const saved = state.plans[date];
+const app = document.querySelector('#app');
 
-  if (Array.isArray(saved)) {
+function cloneDefaults() {
+  return DEFAULT_BLOCKS.map(b => ({ ...b }));
+}
+
+function normalisePlan(plan) {
+  if (!plan) {
+    return { target: 12, blocks: cloneDefaults() };
+  }
+
+  // Support the old format where a plan was directly an array.
+  if (Array.isArray(plan)) {
     return {
       target: 12,
-      blocks: saved.map(b => ({
+      blocks: plan.map(b => ({
         time: b.time || '',
         title: b.title || 'Focus block',
-        done: Boolean(b.done)
+        done: !!b.done
       }))
     };
   }
 
-  if (saved && typeof saved === 'object') {
-    return {
-      target: Number(saved.target) || 12,
-      blocks: Array.isArray(saved.blocks)
-        ? saved.blocks.map(b => ({
-            time: b.time || '',
-            title: b.title || 'Focus block',
-            done: Boolean(b.done)
-          }))
-        : makeDefaultBlocks()
-    };
-  }
-
-  return { target: 12, blocks: makeDefaultBlocks() };
-}
-
-function setPlan(date, plan) {
-  state.plans[date] = {
+  return {
     target: Number(plan.target) || 12,
-    blocks: plan.blocks.map(b => ({
-      time: b.time || '',
-      title: b.title || 'Focus block',
-      done: Boolean(b.done)
-    }))
+    blocks: Array.isArray(plan.blocks)
+      ? plan.blocks.map(b => ({
+          time: b.time || '',
+          title: b.title || 'Focus block',
+          done: !!b.done
+        }))
+      : cloneDefaults()
   };
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;'
-  }[c]));
+function getPlan(date) {
+  return normalisePlan(state.plans[date]);
+}
+
+function formatDate(date) {
+  if (!date) return '';
+  const [y, m, d] = date.split('-');
+  return `${d}/${m}/${y}`;
 }
 
 function render() {
-  const todayKey = localDateKey();
-  const d = day(todayKey);
-  const pct = Math.min(100, Math.round(d.focus / TARGET * 100));
-  const todayPlan = getPlan(todayKey);
+  const d = day();
+  const sharedFocus = Number(cloud.progress?.focus_minutes ?? d.focus ?? 0);
+  const pct = Math.min(100, Math.round(sharedFocus / DEFAULT_TARGET * 100));
 
   app.innerHTML = `
-    <style>
-      .floating-stars {
-        position: fixed;
-        inset: 0;
-        pointer-events: none;
-        overflow: hidden;
-        z-index: 0;
-      }
-      .floating-star {
-        position: absolute;
-        left: var(--x);
-        top: 105vh;
-        font-size: var(--size);
-        opacity: 0;
-        animation: starFloat var(--duration) linear infinite;
-        animation-delay: var(--delay);
-        filter: drop-shadow(0 0 5px rgba(255,255,255,.8));
-      }
-      @keyframes starFloat {
-        0% { transform: translate3d(0, 0, 0) rotate(0deg); opacity: 0; }
-        12% { opacity: .7; }
-        75% { opacity: .55; }
-        100% { transform: translate3d(var(--drift), -125vh, 0) rotate(180deg); opacity: 0; }
-      }
-      .shell { position: relative; z-index: 1; }
-      .timeline-check {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        width: 100%;
-      }
-      .timeline-check input[type="checkbox"] {
-        width: 19px;
-        height: 19px;
-        flex: 0 0 auto;
-        accent-color: #5fbd7b;
-        cursor: pointer;
-      }
-      .timeline-check.done span {
-        text-decoration: line-through;
-        opacity: .55;
-      }
-      .edit-today-row {
-        display: flex;
-        justify-content: flex-end;
-        margin-top: 14px;
-      }
-      .block {
-        display: grid;
-        grid-template-columns: 1fr 1.5fr auto;
-        gap: 10px;
-        align-items: center;
-        margin-bottom: 10px;
-      }
-      .block-done {
-        display: flex;
-        align-items: center;
-        gap: 7px;
-        white-space: nowrap;
-      }
-      @media (max-width: 700px) {
-        .block { grid-template-columns: 1fr; }
-        .block-done { justify-content: flex-start; }
-      }
-    </style>
-
-    <div class="floating-stars" aria-hidden="true">
-      ${Array.from({ length: 18 }, (_, i) => `
-        <span class="floating-star"
-          style="--x:${(i * 17 + 4) % 100}%;--size:${10 + (i % 4) * 4}px;--duration:${13 + (i % 7) * 2}s;--delay:-${i * 1.7}s;--drift:${-35 + (i % 9) * 9}px">✦</span>
-      `).join('')}
-    </div>
-
     <div class="shell">
       <header class="hero">
         <div class="stars">✦　✧　★　✦　✧</div>
@@ -191,10 +118,14 @@ function render() {
       </header>
 
       <nav class="nav">
-        ${['today','schedule','calendar','posts','tools'].map((x, i) => `
-          <button class="navbtn ${i === 0 ? 'active' : ''}" data-view="${x}">
-            ${({today:'Today',schedule:'Schedule / Edit',calendar:'Calendar',posts:'Posts',tools:'Tools'})[x]}
-          </button>
+        ${[
+          ['today', 'Today'],
+          ['schedule', 'Schedule / Edit'],
+          ['calendar', 'Calendar'],
+          ['posts', 'Posts'],
+          ['tools', 'Tools']
+        ].map(([x, label], i) => `
+          <button class="navbtn ${i === 0 ? 'active' : ''}" data-view="${x}">${label}</button>
         `).join('')}
       </nav>
 
@@ -203,18 +134,18 @@ function render() {
           <div class="stats">
             <article class="card">
               <small>TODAY'S FOCUS</small>
-              <strong id="focus">${fmt(d.focus)}</strong>
+              <strong id="focus">${fmt(sharedFocus)}</strong>
               <div class="progress"><i style="width:${pct}%"></i></div>
               <small>${pct}% of 12h</small>
             </article>
             <article class="card">
               <small>REMAINING</small>
-              <strong>${fmt(Math.max(0, TARGET - d.focus))}</strong>
+              <strong>${fmt(Math.max(0, DEFAULT_TARGET - sharedFocus))}</strong>
               <small>Only counted focus time matters.</small>
             </article>
             <article class="card">
               <small>TODAY</small>
-              <strong>${new Date().toLocaleDateString(undefined,{day:'numeric',month:'short'})}</strong>
+              <strong>${new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</strong>
               <button class="btn" id="resetDay">Reset today's record</button>
             </article>
           </div>
@@ -230,22 +161,12 @@ function render() {
           </article>
 
           <article class="card section">
-            <h2>🗓 Today's flexible timeline</h2>
-            <div class="notice">Move breaks and meals when life changes. Protect the total focus target rather than a rigid clock.</div>
-            <div class="timeline" id="todayTimeline">
-              ${todayPlan.blocks.map((b, i) => `
-                <div class="slot">
-                  <label class="timeline-check ${b.done ? 'done' : ''}">
-                    <input type="checkbox" class="today-check" data-index="${i}" ${b.done ? 'checked' : ''}>
-                    <b>${escapeHtml(b.time)}</b>
-                    <span>${escapeHtml(b.title)}</span>
-                  </label>
-                </div>
-              `).join('')}
-            </div>
-            <div class="edit-today-row">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+              <h2 style="margin:0">🗓 Today's flexible timeline</h2>
               <button class="btn primary" id="editToday">✏️ Edit today's schedule</button>
             </div>
+            <div class="notice">Move breaks and meals when life changes. Check off blocks as you finish them.</div>
+            <div class="timeline" id="todayTimeline"></div>
           </article>
         </section>
 
@@ -256,17 +177,19 @@ function render() {
 
             <div class="formrow">
               <label>Date
-                <input id="planDate" type="date" value="${selectedScheduleDate}">
+                <input id="planDate" type="date" value="${today()}">
               </label>
               <label>Focus target (hours)
-                <input id="target" type="number" value="${getPlan(selectedScheduleDate).target}" min="1" max="18" step=".5">
+                <input id="target" type="number" value="12" min="1" max="18" step=".5">
               </label>
             </div>
 
             <div id="blocks"></div>
 
-            <button class="btn" id="addBlock">＋ Add block</button>
-            <button class="btn primary" id="savePlan">💾 Save schedule</button>
+            <div class="controls">
+              <button class="btn" id="addBlock">＋ Add block</button>
+              <button class="btn primary" id="savePlan">💾 Save schedule</button>
+            </div>
           </article>
         </section>
 
@@ -291,7 +214,7 @@ function render() {
 
         <section id="tools" class="view">
           <div class="stats">
-            <article class="card"><small>REAL FOCUS</small><strong>${fmt(d.focus)}</strong><small>Today</small></article>
+            <article class="card"><small>REAL FOCUS</small><strong>${fmt(sharedFocus)}</strong><small>Today</small></article>
             <article class="card"><small>SESSIONS</small><strong>${d.sessions}</strong><small>Today</small></article>
           </div>
           <article class="card section">
@@ -305,35 +228,85 @@ function render() {
       <div class="toast pink">💗 i miss “us”</div>
       <div class="toast yellow">🍈 fresh focus fuel 🍈</div>
       <footer>Built for Atul ✦ ATUL(PLAYGROUND)</footer>
-    </div>
-  `;
+    </div>`;
 
   wire();
-  renderEditorBlocks(selectedScheduleDate);
+  renderTodayTimeline();
+  renderScheduleEditor(today());
   renderCalendar();
   renderPosts();
 }
 
-function showView(view) {
-  document.querySelectorAll('.navbtn').forEach(x =>
-    x.classList.toggle('active', x.dataset.view === view)
-  );
-  document.querySelectorAll('.view').forEach(x =>
-    x.classList.toggle('active', x.id === view)
-  );
+async function loadCloud() {
+  try {
+    const [{ data: progress, error: progressError }, { data: posts, error: postsError }] = await Promise.all([
+      supabase.from('progress').select('id,focus_minutes,progress_date,updated_at').eq('id', 1).maybeSingle(),
+      supabase.from('posts').select('id,caption,image_url,created_at').order('created_at', { ascending: false })
+    ]);
+
+    if (progressError) throw progressError;
+    if (postsError) throw postsError;
+
+    if (!progress) {
+      const { data: created, error } = await supabase.from('progress').insert({ id: 1, focus_minutes: 0, progress_date: today() }).select().single();
+      if (error) throw error;
+      cloud.progress = created;
+    } else if (progress.progress_date !== today()) {
+      const { data: reset, error } = await supabase.from('progress').update({ focus_minutes: 0, progress_date: today() }).eq('id', 1).select().single();
+      if (error) throw error;
+      cloud.progress = reset;
+    } else {
+      cloud.progress = progress;
+    }
+
+    cloud.posts = posts || [];
+    cloud.ready = true;
+    render();
+  } catch (error) {
+    console.error('Supabase error:', error);
+    cloud.ready = false;
+    render();
+  }
 }
 
-function openSchedule(date) {
-  selectedScheduleDate = date || localDateKey();
-  showView('schedule');
-  const input = document.getElementById('planDate');
-  if (input) input.value = selectedScheduleDate;
-  renderEditorBlocks(selectedScheduleDate);
+setInterval(() => {
+  loadCloud();
+}, 15000);
+
+async function updateSharedFocus(delta) {
+  const current = Number(cloud.progress?.focus_minutes || 0);
+  const next = Math.max(0, current + delta);
+  const { data, error } = await supabase.from('progress').update({ focus_minutes: next, progress_date: today(), updated_at: new Date().toISOString() }).eq('id', 1).select().single();
+  if (error) throw error;
+  cloud.progress = data;
+  return data;
+}
+
+async function resetSharedFocus() {
+  const { data, error } = await supabase.from('progress').update({ focus_minutes: 0, progress_date: today(), updated_at: new Date().toISOString() }).eq('id', 1).select().single();
+  if (error) throw error;
+  cloud.progress = data;
+}
+
+
+function switchView(view) {
+  document.querySelectorAll('.navbtn').forEach(x => {
+    x.classList.toggle('active', x.dataset.view === view);
+  });
+  document.querySelectorAll('.view').forEach(x => {
+    x.classList.toggle('active', x.id === view);
+  });
 }
 
 function wire() {
   document.querySelectorAll('.navbtn').forEach(b => {
-    b.onclick = () => showView(b.dataset.view);
+    b.onclick = () => {
+      switchView(b.dataset.view);
+      if (b.dataset.view === 'schedule') {
+        const input = document.getElementById('planDate');
+        renderScheduleEditor(input?.value || today());
+      }
+    };
   });
 
   document.getElementById('start').onclick = () => {
@@ -347,73 +320,96 @@ function wire() {
     timer.running = false;
   };
 
-  document.getElementById('log').onclick = () => {
-    day().focus += 60;
-    day().sessions++;
-    save();
-    render();
-  };
-
-  document.getElementById('resetDay').onclick = () => {
-    if (confirm("Reset today's focus record?")) {
-      state.days[localDateKey()] = { focus: 0, sessions: 0 };
+  document.getElementById('log').onclick = async () => {
+    try {
+      day().sessions++;
       save();
+      await updateSharedFocus(60);
       render();
+    } catch (error) {
+      console.error(error);
+      alert('Could not update shared progress. Check the Supabase setup.');
     }
   };
 
-  document.getElementById('editToday').onclick = () => openSchedule(localDateKey());
+  document.getElementById('resetDay').onclick = async () => {
+    if (!confirm("Reset today's shared focus record?")) return;
+    try {
+      state.days[today()] = { focus: 0, sessions: 0 };
+      save();
+      await resetSharedFocus();
+      render();
+    } catch (error) {
+      console.error(error);
+      alert('Could not reset shared progress. Check the Supabase setup.');
+    }
+  };
+
+  document.getElementById('editToday').onclick = () => {
+    switchView('schedule');
+    const input = document.getElementById('planDate');
+    input.value = today();
+    renderScheduleEditor(today());
+  };
 
   document.getElementById('planDate').onchange = e => {
-    selectedScheduleDate = e.target.value || localDateKey();
-    renderEditorBlocks(selectedScheduleDate);
+    renderScheduleEditor(e.target.value);
   };
 
-  document.getElementById('addBlock').onclick = () => {
-    addBlock();
-  };
+  document.getElementById('addBlock').onclick = () => addBlock();
 
   document.getElementById('savePlan').onclick = () => {
-    const date = document.getElementById('planDate').value || localDateKey();
-    const target = Number(document.getElementById('target').value) || 12;
+    const date = document.getElementById('planDate').value;
+    if (!date) return;
 
-    const blocks = [...document.querySelectorAll('.block')].map(b => ({
-      time: b.querySelector('.bt').value,
-      title: b.querySelector('.bn').value,
-      done: b.querySelector('.block-check').checked
+    const blocks = [...document.querySelectorAll('#blocks .block')].map(b => ({
+      time: b.querySelector('.bt')?.value || '',
+      title: b.querySelector('.bn')?.value || 'Focus block',
+      done: !!b.querySelector('.bc')?.checked
     }));
 
-    setPlan(date, { target, blocks });
-    selectedScheduleDate = date;
+    state.plans[date] = {
+      target: Number(document.getElementById('target').value) || 12,
+      blocks
+    };
+
     save();
-    alert('Schedule saved.');
-    render();
-    showView('schedule');
+    renderTodayTimeline();
+    alert(`Schedule saved for ${formatDate(date)}.`);
   };
 
-  document.querySelectorAll('.today-check').forEach(cb => {
-    cb.onchange = () => {
-      const index = Number(cb.dataset.index);
-      const plan = getPlan(localDateKey());
-      if (plan.blocks[index]) {
-        plan.blocks[index].done = cb.checked;
-        setPlan(localDateKey(), plan);
-        save();
-        cb.closest('.timeline-check').classList.toggle('done', cb.checked);
-      }
-    };
-  });
-
-  document.getElementById('publish').onclick = () => {
+  document.getElementById('publish').onclick = async () => {
     const text = document.getElementById('postText').value.trim();
     const file = document.getElementById('postImage').files[0];
-
     if (!text && !file) return;
-    if (!file) return pushPost(text, '');
+    const button = document.getElementById('publish');
+    button.disabled = true;
+    button.textContent = 'Publishing…';
+    try {
+      let imageUrl = '';
+      if (file) {
+        if (!file.type.startsWith('image/')) throw new Error('Please choose an image.');
+        if (file.size > 5 * 1024 * 1024) throw new Error('Please keep images under 5 MB.');
+        const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const path = `${Date.now()}-${crypto.randomUUID()}.${ext}`;
+        const { error: uploadError } = await supabase.storage.from('post-images').upload(path, file, { contentType: file.type, upsert: false });
+        if (uploadError) throw uploadError;
+        imageUrl = supabase.storage.from('post-images').getPublicUrl(path).data.publicUrl;
+      }
 
-    const reader = new FileReader();
-    reader.onload = () => pushPost(text, reader.result);
-    reader.readAsDataURL(file);
+      const { data, error } = await supabase.from('posts').insert({ caption: text, image_url: imageUrl || null }).select().single();
+      if (error) throw error;
+      cloud.posts.unshift(data);
+      document.getElementById('postText').value = '';
+      document.getElementById('postImage').value = '';
+      renderPosts();
+    } catch (error) {
+      console.error(error);
+      alert(`Could not publish: ${error.message || error}`);
+    } finally {
+      button.disabled = false;
+      button.textContent = 'Publish';
+    }
   };
 
   document.getElementById('saveNote').onclick = () => {
@@ -423,50 +419,85 @@ function wire() {
   };
 }
 
-function renderEditorBlocks(date) {
-  const container = document.getElementById('blocks');
+function renderScheduleEditor(date) {
+  const blocks = document.getElementById('blocks');
   const target = document.getElementById('target');
-
-  if (!container || !target) return;
+  if (!blocks || !target) return;
 
   const plan = getPlan(date);
   target.value = plan.target;
-  container.innerHTML = '';
 
-  plan.blocks.forEach(block => addBlock(block.time, block.title, block.done));
+  blocks.innerHTML = '';
+  plan.blocks.forEach(b => addBlock(b.time, b.title, b.done));
 }
 
 function addBlock(time = '', title = 'Focus block', done = false) {
-  const container = document.getElementById('blocks');
-  if (!container) return;
+  const blocks = document.getElementById('blocks');
+  if (!blocks) return;
 
   const el = document.createElement('div');
   el.className = 'block';
-
   el.innerHTML = `
-    <input class="bt" placeholder="Time" value="${escapeHtml(time)}">
-    <input class="bn" placeholder="Block name" value="${escapeHtml(title)}">
-    <label class="block-done">
-      <input type="checkbox" class="block-check" ${done ? 'checked' : ''}>
-      Done
+    <label class="block-check" title="Mark this block complete">
+      <input class="bc" type="checkbox" ${done ? 'checked' : ''}>
+      <span>Done</span>
     </label>
+    <input class="bt" placeholder="Time" value="${escapeAttr(time)}">
+    <input class="bn" placeholder="Block name" value="${escapeAttr(title)}">
     <button class="btn danger remove" type="button">Remove</button>
   `;
 
+  const checkbox = el.querySelector('.bc');
+  checkbox.onchange = () => {
+    el.classList.toggle('completed', checkbox.checked);
+  };
+  el.classList.toggle('completed', done);
+
   el.querySelector('.remove').onclick = () => el.remove();
-  container.appendChild(el);
+  blocks.appendChild(el);
+}
+
+function renderTodayTimeline() {
+  const timeline = document.getElementById('todayTimeline');
+  if (!timeline) return;
+
+  const plan = getPlan(today());
+
+  timeline.innerHTML = '';
+
+  plan.blocks.forEach((b, index) => {
+    const row = document.createElement('div');
+    row.className = `slot ${b.done ? 'completed' : ''}`;
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = !!b.done;
+    checkbox.title = 'Mark complete';
+
+    const time = document.createElement('b');
+    time.textContent = b.time;
+
+    const title = document.createElement('span');
+    title.textContent = b.title;
+
+    checkbox.onchange = () => {
+      const current = getPlan(today());
+      if (!current.blocks[index]) return;
+      current.blocks[index].done = checkbox.checked;
+      state.plans[today()] = current;
+      save();
+      row.classList.toggle('completed', checkbox.checked);
+    };
+
+    row.append(checkbox, time, title);
+    timeline.appendChild(row);
+  });
 }
 
 function pushPost(text, img) {
+  // Kept for compatibility with older local data. New posts use Supabase.
   state.posts.push({ text, img, date: Date.now() });
   save();
-
-  const textEl = document.getElementById('postText');
-  const imageEl = document.getElementById('postImage');
-
-  if (textEl) textEl.value = '';
-  if (imageEl) imageEl.value = '';
-
   renderPosts();
 }
 
@@ -474,19 +505,20 @@ function renderPosts() {
   const list = document.getElementById('postList');
   if (!list) return;
 
-  if (!state.posts.length) {
+  if (!cloud.ready && !cloud.posts.length) {
+    list.innerHTML = '<div class="card empty">Connecting to shared posts…</div>';
+    return;
+  }
+
+  if (!cloud.posts.length) {
     list.innerHTML = '<div class="card empty">No posts yet. Make the first one ✦</div>';
     return;
   }
 
-  list.innerHTML = [...state.posts].reverse().map(p => `
+  list.innerHTML = cloud.posts.map(p => `
     <article class="post card">
-      ${p.img ? `<img src="${p.img}" alt="Post image">` : ''}
-      <div>
-        <b>Atul</b>
-        <p>${escapeHtml(p.text || '')}</p>
-        <small>${new Date(p.date).toLocaleString()}</small>
-      </div>
+      ${p.image_url ? `<img src="${escapeAttr(p.image_url)}" alt="Post image">` : ''}
+      <div><b>Atul</b><p>${escapeHtml(p.caption || '')}</p><small>${new Date(p.created_at).toLocaleString()}</small></div>
     </article>
   `).join('');
 }
@@ -501,29 +533,30 @@ function renderCalendar() {
   const first = new Date(y, m, 1).getDay();
   const days = new Date(y, m + 1, 0).getDate();
 
-  let html = `<div class="calhead">${now.toLocaleDateString(undefined,{month:'long',year:'numeric'})}</div>`;
-
-  for (let i = 0; i < (first + 6) % 7; i++) {
-    html += '<div></div>';
-  }
+  let html = `<div class="calhead">${now.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</div>`;
+  for (let i = 0; i < (first + 6) % 7; i++) html += '<div></div>';
 
   for (let n = 1; n <= days; n++) {
-    const k = `${y}-${pad(m + 1)}-${pad(n)}`;
+    const k = `${y}-${String(m + 1).padStart(2, '0')}-${String(n).padStart(2, '0')}`;
     const f = state.days[k]?.focus || 0;
-    const isToday = k === localDateKey();
+    const hasPlan = !!state.plans[k];
 
     html += `
-      <button type="button" class="calday ${isToday ? 'today' : ''}" data-date="${k}">
+      <button type="button" class="calday ${k === today() ? 'today' : ''}" data-date="${k}" title="Edit ${formatDate(k)}">
         <b>${n}</b>
-        <small>${f ? fmt(f) : ''}</small>
-      </button>
-    `;
+        <small>${f ? fmt(f) : ''}${hasPlan ? ' ✎' : ''}</small>
+      </button>`;
   }
 
   el.innerHTML = html;
 
-  el.querySelectorAll('.calday').forEach(button => {
-    button.onclick = () => openSchedule(button.dataset.date);
+  el.querySelectorAll('.calday').forEach(btn => {
+    btn.onclick = () => {
+      const date = btn.dataset.date;
+      switchView('schedule');
+      document.getElementById('planDate').value = date;
+      renderScheduleEditor(date);
+    };
   });
 }
 
@@ -531,15 +564,29 @@ function tick() {
   if (!timer.running) return;
 
   timer.seconds = Math.floor((Date.now() - timer.startedAt) / 1000);
-
   const h = String(Math.floor(timer.seconds / 3600)).padStart(2, '0');
   const m = String(Math.floor((timer.seconds % 3600) / 60)).padStart(2, '0');
   const s = String(timer.seconds % 60).padStart(2, '0');
-
   const t = document.getElementById('timer');
-  if (t) t.textContent = `${h}:${m}:${s}`;
 
+  if (t) t.textContent = `${h}:${m}:${s}`;
   requestAnimationFrame(tick);
 }
 
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[c]));
+}
+
+function escapeAttr(s) {
+  return escapeHtml(s);
+}
+
 render();
+loadCloud();
+
