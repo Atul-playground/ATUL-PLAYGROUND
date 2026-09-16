@@ -48,6 +48,7 @@ let state = JSON.parse(localStorage.getItem(KEY) || 'null') || {
 };
 
 let timer = { running: false, seconds: 0, startedAt: null };
+let serverClockOffsetMs = 0;
 let cloud = { progress: null, posts: [], ready: false, loading: false };
 let currentView = 'today';
 let selectedScheduleDate = today();
@@ -134,23 +135,23 @@ function render() {
         100% { transform: translate3d(var(--drift),-125vh,0) rotate(220deg); opacity: 0; }
       }
       .shell { position: relative; z-index: 1; }
-      .water-reminder { position: fixed; right: 22px; bottom: 22px; display: none; width: min(300px, calc(100vw - 36px)); z-index: 50; }
-      .water-reminder.show { display: block; animation: waterPop .35s ease-out; }
-      .water-box { position: relative; overflow: hidden; padding: 16px; border-radius: 20px; background: rgba(255,255,255,.96); border: 1px solid rgba(75,130,110,.18); box-shadow: 0 14px 40px rgba(0,0,0,.16); }
+      .water-reminder { position: fixed; right: 22px; bottom: 22px; width: min(270px, calc(100vw - 36px)); z-index: 50; opacity: .96; }
+      .water-reminder.glow .water-box { animation: waterGlow 1.35s ease-in-out infinite; }
+      .water-box { position: relative; overflow: hidden; padding: 13px 14px; border-radius: 18px; background: rgba(255,255,255,.94); border: 1px solid rgba(75,130,110,.18); box-shadow: 0 10px 30px rgba(0,0,0,.13); }
       .water-box::before, .water-box::after { content: ''; position:absolute; border-radius:50%; background: rgba(111,206,184,.18); pointer-events:none; animation: waterBubble 3.2s ease-in-out infinite; }
-      .water-box::before { width: 42px; height: 42px; right: 20px; bottom: -14px; }
-      .water-box::after { width: 18px; height: 18px; right: 78px; bottom: 8px; animation-delay: -1.4s; }
-      .water-head { display:flex; align-items:center; justify-content:space-between; gap:10px; position:relative; z-index:1; }
-      .water-head h2 { margin:0; font-size:1rem; }
-      .water-close { border:0; background:transparent; font-size:18px; cursor:pointer; padding:4px 8px; border-radius:10px; }
+      .water-box::before { width: 34px; height: 34px; right: 18px; bottom: -12px; }
+      .water-box::after { width: 15px; height: 15px; right: 66px; bottom: 7px; animation-delay: -1.4s; }
+      .water-head { display:flex; align-items:center; justify-content:space-between; gap:8px; position:relative; z-index:1; }
+      .water-head h2 { margin:0; font-size:.92rem; }
+      .water-close { border:0; background:transparent; font-size:17px; cursor:pointer; padding:3px 7px; border-radius:9px; }
       .water-close:hover { background: rgba(0,0,0,.05); }
-      .water-copy { margin:6px 0 10px; font-size:.86rem; position:relative; z-index:1; }
-      .water-progress { height:8px; border-radius:999px; overflow:hidden; background:rgba(0,0,0,.08); margin:8px 0 12px; position:relative; z-index:1; }
+      .water-copy { margin:5px 0 8px; font-size:.78rem; position:relative; z-index:1; }
+      .water-progress { height:7px; border-radius:999px; overflow:hidden; background:rgba(0,0,0,.08); margin:7px 0 9px; position:relative; z-index:1; }
       .water-progress i { display:block; height:100%; width:0%; background:linear-gradient(90deg,#76c7ff,#7ee6b0); transition:width .25s ease; }
-      .water-actions { display:flex; gap:6px; flex-wrap:wrap; position:relative; z-index:1; }
-      .water-actions .btn { min-width:0; padding:7px 10px; font-size:.8rem; }
-      @keyframes waterPop { from { opacity:0; transform:translateY(12px) scale(.96); } to { opacity:1; transform:translateY(0) scale(1); } }
-      @keyframes waterBubble { 0%,100% { transform:translateY(0) scale(1); opacity:.45; } 50% { transform:translateY(-18px) scale(1.12); opacity:.8; } }
+      .water-actions { display:flex; gap:5px; flex-wrap:wrap; position:relative; z-index:1; }
+      .water-actions .btn { min-width:0; padding:6px 8px; font-size:.74rem; }
+      @keyframes waterGlow { 0%,100% { box-shadow: 0 10px 30px rgba(0,0,0,.13), 0 0 0 rgba(74,190,165,0); } 50% { box-shadow: 0 10px 30px rgba(0,0,0,.13), 0 0 24px rgba(74,190,165,.72); } }
+      @keyframes waterBubble { 0%,100% { transform:translateY(0) scale(1); opacity:.35; } 50% { transform:translateY(-18px) scale(1.12); opacity:.8; } }
     </style>
 
       <div class="shell">
@@ -271,7 +272,7 @@ function render() {
 
       <div class="toast pink">💗 i miss “us”</div>
       <div class="toast yellow">🍈 fresh focus fuel 🍈</div>
-      <div class="water-reminder" id="waterReminder" role="dialog" aria-labelledby="waterTitle">
+      <div class="water-reminder" id="waterReminder" role="status" aria-live="polite">
         <div class="water-box">
           <div class="water-head">
             <h2 id="waterTitle">💧 Water check</h2>
@@ -340,6 +341,7 @@ async function loadCloud(initial = false) {
       : null;
     save();
     cloud.ready = true;
+    await syncServerClock();
   } catch (error) {
     console.error('Supabase error:', error);
     cloud.ready = false;
@@ -460,9 +462,11 @@ function switchView(view) {
   });
 }
 
+function sharedNow() { return Date.now() + serverClockOffsetMs; }
+
 function updateSharedTimerUI() {
   const t = document.getElementById('timer');
-  if (t) t.textContent = formatTimer(timer.running ? Math.max(timer.seconds, Math.floor((Date.now() - timer.startedAt) / 1000)) : timer.seconds);
+  if (t) t.textContent = formatTimer(timer.running ? Math.max(timer.seconds, Math.floor((sharedNow() - timer.startedAt) / 1000)) : timer.seconds);
 }
 
 function formatTimer(seconds) {
@@ -473,22 +477,53 @@ function formatTimer(seconds) {
   return `${h}:${m}:${s}`;
 }
 
-let timerHeartbeatBusy = false;
-setInterval(async () => {
-  if (!timer.running || !cloud.ready || timerHeartbeatBusy) return;
-  timerHeartbeatBusy = true;
+let timerSyncBusy = false;
+
+async function syncServerClock() {
   try {
-    timer.seconds = Math.max(0, Math.floor((Date.now() - timer.startedAt) / 1000));
-    await saveTimerState();
+    const before = Date.now();
+    const { data, error } = await supabase.rpc('get_server_time');
+    const after = Date.now();
+    if (error || !data) return;
+    const serverMs = new Date(data).getTime();
+    const midpoint = before + Math.round((after - before) / 2);
+    if (Number.isFinite(serverMs)) serverClockOffsetMs = serverMs - midpoint;
   } catch (error) {
-    console.error('Timer heartbeat sync failed:', error);
-  } finally {
-    timerHeartbeatBusy = false;
+    console.error('Server clock sync failed:', error);
   }
-}, 5000);
+}
+
+async function refreshTimerFromCloud() {
+  if (!cloud.ready || timerSyncBusy) return;
+  timerSyncBusy = true;
+  try {
+    const { data, error } = await supabase.from('progress')
+      .select('id,focus_minutes,progress_date,updated_at,plans,note,sessions,timer_running,timer_started_at,timer_seconds')
+      .eq('id', 1).maybeSingle();
+    if (error || !data || data.progress_date !== today()) return;
+    cloud.progress = data;
+    timer.running = !!data.timer_running;
+    timer.seconds = Number(data.timer_seconds || 0);
+    timer.startedAt = data.timer_started_at ? new Date(data.timer_started_at).getTime() : null;
+    state.days[today()] ||= { focus: 0, sessions: 0 };
+    state.days[today()].sessions = Number(data.sessions || 0);
+    updateSharedTimerUI();
+    updateVisibleCloudUI();
+  } catch (error) {
+    console.error('Timer sync failed:', error);
+  } finally {
+    timerSyncBusy = false;
+  }
+}
+
+setInterval(() => {
+  if (timer.running) updateSharedTimerUI();
+}, 250);
+
+setInterval(refreshTimerFromCloud, 3000);
 
 async function saveTimerState() {
-  const { data, error } = await supabase.from('progress').update({
+  const payload = {
     timer_running: timer.running,
     timer_started_at: timer.startedAt ? new Date(timer.startedAt).toISOString() : null,
     timer_seconds: timer.seconds,
@@ -497,9 +532,54 @@ async function saveTimerState() {
     note: state.note,
     progress_date: today(),
     updated_at: new Date().toISOString()
-  }).eq('id', 1).select('id,focus_minutes,progress_date,updated_at,plans,note,sessions,timer_running,timer_started_at,timer_seconds').single();
+  };
+  const { data, error } = await supabase.from('progress').update(payload)
+    .eq('id', 1)
+    .select('id,focus_minutes,progress_date,updated_at,plans,note,sessions,timer_running,timer_started_at,timer_seconds')
+    .single();
   if (error) throw error;
   cloud.progress = data;
+  timer.running = !!data.timer_running;
+  timer.seconds = Number(data.timer_seconds || 0);
+  timer.startedAt = data.timer_started_at ? new Date(data.timer_started_at).getTime() : null;
+}
+
+async function applyTimerRow(data) {
+  if (!data) throw new Error('No timer row returned');
+  cloud.progress = data;
+  timer.running = !!data.timer_running;
+  timer.seconds = Number(data.timer_seconds || 0);
+  timer.startedAt = data.timer_started_at ? new Date(data.timer_started_at).getTime() : null;
+  state.days[today()] ||= { focus: 0, sessions: 0 };
+  state.days[today()].sessions = Number(data.sessions || 0);
+  updateVisibleCloudUI();
+  updateSharedTimerUI();
+}
+
+async function startSharedTimer() {
+  const seconds = Math.max(0, Number(timer.seconds) || 0);
+  const { data, error } = await supabase.rpc('start_shared_timer', { p_seconds: seconds });
+  if (!error && data) {
+    await applyTimerRow(data);
+    return;
+  }
+  // Backward-compatible fallback if the new SQL function has not been run yet.
+  timer.running = true;
+  timer.startedAt = sharedNow() - seconds * 1000;
+  await saveTimerState();
+}
+
+async function pauseSharedTimer(seconds) {
+  const safeSeconds = Math.max(0, Math.floor(Number(seconds) || 0));
+  const { data, error } = await supabase.rpc('pause_shared_timer', { p_seconds: safeSeconds });
+  if (!error && data) {
+    await applyTimerRow(data);
+    return;
+  }
+  timer.running = false;
+  timer.seconds = safeSeconds;
+  timer.startedAt = null;
+  await saveTimerState();
 }
 
 function getWaterState() {
@@ -522,22 +602,16 @@ function updateWaterPopup() {
   const { data } = getWaterState();
   const amount = document.getElementById('waterAmount');
   const bar = document.getElementById('waterBar');
+  const popup = document.getElementById('waterReminder');
   if (amount) amount.textContent = `${(data.ml / 1000).toFixed(2)} L / 4.0 L`;
   if (bar) bar.style.width = `${Math.min(100, data.ml / 40)}%`;
-  if (data.ml >= 4000) closeWaterReminder();
+  if (popup) popup.classList.toggle('glow', data.ml < 4000 && data.lastReminder > 0 && Date.now() - data.lastReminder < 60 * 60 * 1000);
 }
 
-function showWaterReminder() {
-  const { data } = getWaterState();
-  if (data.ml >= 4000) return;
+function setWaterGlow(needed) {
   const popup = document.getElementById('waterReminder');
   if (!popup) return;
-  popup.classList.add('show');
-  updateWaterPopup();
-}
-
-function closeWaterReminder() {
-  document.getElementById('waterReminder')?.classList.remove('show');
+  popup.classList.toggle('glow', !!needed);
 }
 
 function addWater(ml) {
@@ -547,23 +621,32 @@ function addWater(ml) {
   data.lastReminder = Date.now();
   localStorage.setItem(key, JSON.stringify(data));
   updateWaterPopup();
+  setWaterGlow(false);
+}
+
+function remindWaterNow() {
+  const { key, data } = getWaterState();
   if (data.ml >= 4000) {
-    closeWaterReminder();
-    alert('💧 4.0 L reached for today. Water reminders are finished for today.');
+    setWaterGlow(false);
+    return;
   }
+  data.lastReminder = Date.now();
+  localStorage.setItem(key, JSON.stringify(data));
+  setWaterGlow(true);
 }
 
 function startWaterReminderSystem() {
   const maybeRemind = () => {
-    const { key, data } = getWaterState();
-    if (data.ml >= 4000) return;
+    const { data } = getWaterState();
+    if (data.ml >= 4000) {
+      setWaterGlow(false);
+      return;
+    }
     if (!data.lastReminder || Date.now() - data.lastReminder >= 60 * 60 * 1000) {
-      data.lastReminder = Date.now();
-      localStorage.setItem(key, JSON.stringify(data));
-      showWaterReminder();
+      remindWaterNow();
     }
   };
-  setTimeout(maybeRemind, 60 * 60 * 1000);
+  maybeRemind();
   setInterval(maybeRemind, 60 * 1000);
 }
 
@@ -571,8 +654,8 @@ function wireWaterReminder() {
   document.getElementById('water250')?.addEventListener('click', () => addWater(250));
   document.getElementById('water500')?.addEventListener('click', () => addWater(500));
   document.getElementById('water1000')?.addEventListener('click', () => addWater(1000));
-  document.getElementById('waterClose')?.addEventListener('click', closeWaterReminder);
-  document.getElementById('waterClose2')?.addEventListener('click', closeWaterReminder);
+  document.getElementById('waterClose')?.addEventListener('click', () => setWaterGlow(false));
+  document.getElementById('waterClose2')?.addEventListener('click', () => setWaterGlow(false));
   updateWaterPopup();
   startWaterReminderSystem();
 }
@@ -590,27 +673,26 @@ function wire() {
   });
 
   document.getElementById('start').onclick = async () => {
+    await syncServerClock();
+    await refreshTimerFromCloud();
     if (timer.running) return;
-    timer.running = true;
-    timer.startedAt = Date.now() - timer.seconds * 1000;
+    const secondsAtStart = Math.max(0, Number(timer.seconds) || 0);
     try {
-      await saveTimerState();
+      await startSharedTimer();
       updateSharedTimerUI();
-      tick();
     } catch (error) {
-      timer.running = false;
       console.error(error);
       alert('Could not start the shared timer. Check the Supabase setup.');
     }
   };
 
   document.getElementById('pause').onclick = async () => {
+    await syncServerClock();
+    await refreshTimerFromCloud();
     if (!timer.running) return;
-    timer.seconds = Math.max(timer.seconds, Math.floor((Date.now() - timer.startedAt) / 1000));
-    timer.running = false;
-    timer.startedAt = null;
+    const seconds = Math.max(0, Math.floor((sharedNow() - timer.startedAt) / 1000));
     try {
-      await saveTimerState();
+      await pauseSharedTimer(seconds);
       updateSharedTimerUI();
     } catch (error) {
       console.error(error);
@@ -619,19 +701,22 @@ function wire() {
   };
 
   document.getElementById('log').onclick = async () => {
-    const raw = prompt('How many minutes do you want to log?', '60');
+    const raw = prompt('How many minutes do you want to log in today\'s goal?', '60');
     if (raw === null) return;
-    const minutes = Number(raw);
-    if (!Number.isFinite(minutes) || minutes <= 0 || minutes > 1440) {
-      alert('Enter a number of minutes between 1 and 1440.');
+    const minutes = Number(String(raw).trim());
+    if (!Number.isFinite(minutes) || !Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
+      alert('Enter a whole number of minutes between 1 and 1440.');
       return;
     }
+    const previousSessions = day().sessions;
     try {
-      day().sessions++;
+      day().sessions = previousSessions + 1;
       save();
       await updateSharedFocus(minutes);
       updateVisibleCloudUI();
     } catch (error) {
+      day().sessions = previousSessions;
+      save();
       console.error(error);
       alert('Could not update shared progress. Check the Supabase setup.');
     }
