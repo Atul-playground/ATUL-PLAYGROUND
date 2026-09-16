@@ -48,8 +48,9 @@ let state = JSON.parse(localStorage.getItem(KEY) || 'null') || {
 };
 
 let timer = { running: false, seconds: 0, startedAt: null };
-let cloud = { progress: null, posts: [], ready: false };
+let cloud = { progress: null, posts: [], ready: false, loading: false };
 let currentView = 'today';
+let selectedScheduleDate = today();
 
 const save = () => localStorage.setItem(KEY, JSON.stringify(state));
 
@@ -105,14 +106,39 @@ function formatDate(date) {
 }
 
 function render() {
+  const activeView = currentView || 'today';
   const d = day();
   const sharedFocus = Number(cloud.progress?.focus_minutes ?? d.focus ?? 0);
   const pct = Math.min(100, Math.round(sharedFocus / DEFAULT_TARGET * 100));
 
   app.innerHTML = `
-    <div class="shell">
+    <style>
+      body {
+        background: linear-gradient(-45deg, #dff5e7, #e8f4ff, #f6e8ff, #fff3d9, #dff5e7);
+        background-size: 500% 500%;
+        animation: atulGradient 60s ease-in-out infinite;
+      }
+      @keyframes atulGradient {
+        0% { background-position: 0% 50%; }
+        25% { background-position: 50% 100%; }
+        50% { background-position: 100% 50%; }
+        75% { background-position: 50% 0%; }
+        100% { background-position: 0% 50%; }
+      }
+      .floating-stars { position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 0; }
+      .floating-star { position: absolute; left: var(--x); top: 105vh; font-size: var(--size); opacity: 0; animation: starFloat var(--duration) linear infinite; animation-delay: var(--delay); filter: drop-shadow(0 0 6px rgba(255,255,255,.9)); }
+      @keyframes starFloat {
+        0% { transform: translate3d(0,0,0) rotate(0deg); opacity: 0; }
+        10% { opacity: .85; }
+        75% { opacity: .6; }
+        100% { transform: translate3d(var(--drift),-125vh,0) rotate(220deg); opacity: 0; }
+      }
+      .shell { position: relative; z-index: 1; }
+    </style>
+
+      <div class="shell">
       <header class="hero">
-        <div class="stars">✦　✧　★　✦　✧</div>
+        <div class="floating-stars" aria-hidden="true">${Array.from({ length: 36 }, (_, i) => `<span class="floating-star" style="--x:${(i * 37) % 100}%;--size:${12 + (i % 6) * 5}px;--duration:${14 + (i % 9) * 2}s;--delay:-${(i % 14) * 2}s;--drift:${-35 + (i % 8) * 10}px">${i % 3 === 0 ? '✦' : i % 3 === 1 ? '✧' : '★'}</span>`).join('')}</div>
         <div class="eyebrow">ATUL'S PERSONAL PLAYGROUND · OWNERSHIP: ATUL</div>
         <h1>ATUL<br><span>(PLAYGROUND)</span></h1>
         <p>A flexible personal workspace built around one objective: <b>12 hours of real focused work.</b></p>
@@ -125,13 +151,13 @@ function render() {
           ['calendar', 'Calendar'],
           ['posts', 'Posts'],
           ['tools', 'Tools']
-        ].map(([x, label], i) => `
-          <button class="navbtn ${x === currentView ? 'active' : ''}" data-view="${x}">${label}</button>
+        ].map(([x, label]) => `
+          <button class="navbtn ${activeView === x ? 'active' : ''}" data-view="${x}">${label}</button>
         `).join('')}
       </nav>
 
       <main>
-        <section id="today" class="view${currentView === 'today' ? ' active' : ''}">
+        <section id="today" class="view ${activeView === 'today' ? 'active' : ''}">
           <div class="stats">
             <article class="card">
               <small>TODAY'S FOCUS</small>
@@ -171,14 +197,14 @@ function render() {
           </article>
         </section>
 
-        <section id="schedule" class="view">
+        <section id="schedule" class="view ${activeView === 'schedule' ? 'active' : ''}">
           <article class="card">
             <h2>✨ Schedule / Edit a day</h2>
             <p class="muted">Choose any date. Edit, add, remove, and check off timetable blocks.</p>
 
             <div class="formrow">
               <label>Date
-                <input id="planDate" type="date" value="${today()}">
+                <input id="planDate" type="date" value="${selectedScheduleDate || today()}">
               </label>
               <label>Focus target (hours)
                 <input id="target" type="number" value="12" min="1" max="18" step=".5">
@@ -194,7 +220,7 @@ function render() {
           </article>
         </section>
 
-        <section id="calendar" class="view">
+        <section id="calendar" class="view ${activeView === 'calendar' ? 'active' : ''}">
           <article class="card">
             <h2>📅 Calendar</h2>
             <div class="calendar" id="calendarGrid"></div>
@@ -202,7 +228,7 @@ function render() {
           </article>
         </section>
 
-        <section id="posts" class="view">
+        <section id="posts" class="view ${activeView === 'posts' ? 'active' : ''}">
           <article class="card">
             <h2>📸 Posts</h2>
             <p class="muted">Wins, thoughts, pictures and motivation.</p>
@@ -213,7 +239,7 @@ function render() {
           <div id="postList" class="postgrid"></div>
         </section>
 
-        <section id="tools" class="view">
+        <section id="tools" class="view ${activeView === 'tools' ? 'active' : ''}">
           <div class="stats">
             <article class="card"><small>REAL FOCUS</small><strong>${fmt(sharedFocus)}</strong><small>Today</small></article>
             <article class="card"><small>SESSIONS</small><strong>${d.sessions}</strong><small>Today</small></article>
@@ -233,12 +259,14 @@ function render() {
 
   wire();
   renderTodayTimeline();
-  renderScheduleEditor(today());
+  renderScheduleEditor(selectedScheduleDate || today());
   renderCalendar();
   renderPosts();
 }
 
-async function loadCloud() {
+async function loadCloud(initial = false) {
+  if (cloud.loading) return;
+  cloud.loading = true;
   try {
     const [{ data: progress, error: progressError }, { data: posts, error: postsError }] = await Promise.all([
       supabase.from('progress').select('id,focus_minutes,progress_date,updated_at,plans,note').eq('id', 1).maybeSingle(),
@@ -265,16 +293,37 @@ async function loadCloud() {
     if (typeof cloud.progress?.note === 'string') state.note = cloud.progress.note;
     save();
     cloud.ready = true;
-    render();
   } catch (error) {
     console.error('Supabase error:', error);
     cloud.ready = false;
+  } finally {
+    cloud.loading = false;
+  }
+  if (initial) {
     render();
+  } else {
+    updateVisibleCloudUI();
   }
 }
 
+function updateVisibleCloudUI() {
+  const d = day();
+  const sharedFocus = Number(cloud.progress?.focus_minutes ?? d.focus ?? 0);
+  d.focus = sharedFocus;
+  save();
+
+  const focusEl = document.getElementById('focus');
+  if (focusEl) focusEl.textContent = fmt(sharedFocus);
+
+  const progressEl = document.querySelector('.progress i');
+  if (progressEl) progressEl.style.width = `${Math.min(100, Math.round(sharedFocus / DEFAULT_TARGET * 100))}%`;
+
+  // Refresh posts without rebuilding the whole app.
+  renderPosts();
+}
+
 setInterval(() => {
-  loadCloud();
+  loadCloud(false);
 }, 15000);
 
 async function updateSharedFocus(delta) {
@@ -324,11 +373,11 @@ function subscribeToCloud() {
         state.days[today()] ||= { focus: 0, sessions: 0 };
         state.days[today()].focus = Number(payload.new.focus_minutes || 0);
         save();
-        render();
+        updateVisibleCloudUI();
       }
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'posts' }, payload => {
-      loadCloud();
+      loadCloud(false);
     })
     .subscribe();
 }
@@ -350,7 +399,8 @@ function wire() {
       switchView(b.dataset.view);
       if (b.dataset.view === 'schedule') {
         const input = document.getElementById('planDate');
-        renderScheduleEditor(input?.value || today());
+        selectedScheduleDate = input?.value || selectedScheduleDate || today();
+        renderScheduleEditor(selectedScheduleDate);
       }
     };
   });
@@ -393,13 +443,15 @@ function wire() {
 
   document.getElementById('editToday').onclick = () => {
     switchView('schedule');
+    selectedScheduleDate = today();
     const input = document.getElementById('planDate');
-    input.value = today();
-    renderScheduleEditor(today());
+    input.value = selectedScheduleDate;
+    renderScheduleEditor(selectedScheduleDate);
   };
 
   document.getElementById('planDate').onchange = e => {
-    renderScheduleEditor(e.target.value);
+    selectedScheduleDate = e.target.value || today();
+    renderScheduleEditor(selectedScheduleDate);
   };
 
   document.getElementById('addBlock').onclick = () => addBlock();
@@ -613,6 +665,7 @@ function renderCalendar() {
     btn.onclick = () => {
       const date = btn.dataset.date;
       switchView('schedule');
+      selectedScheduleDate = date;
       document.getElementById('planDate').value = date;
       renderScheduleEditor(date);
     };
@@ -647,6 +700,6 @@ function escapeAttr(s) {
 }
 
 render();
-loadCloud();
+loadCloud(true);
 subscribeToCloud();
 
