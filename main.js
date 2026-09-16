@@ -48,7 +48,9 @@ let state = JSON.parse(localStorage.getItem(KEY) || 'null') || {
 };
 
 let timer = { running: false, seconds: 0, startedAt: null };
-let cloud = { progress: null, posts: [], ready: false };
+let cloud = { progress: null, posts: [], ready: false, loading: false };
+let currentView = 'today';
+let selectedScheduleDate = today();
 
 const save = () => localStorage.setItem(KEY, JSON.stringify(state));
 
@@ -104,14 +106,46 @@ function formatDate(date) {
 }
 
 function render() {
+  const activeView = currentView || 'today';
   const d = day();
   const sharedFocus = Number(cloud.progress?.focus_minutes ?? d.focus ?? 0);
   const pct = Math.min(100, Math.round(sharedFocus / DEFAULT_TARGET * 100));
 
   app.innerHTML = `
-    <div class="shell">
+    <style>
+      body {
+        background: linear-gradient(-45deg, #dff5e7, #e8f4ff, #f6e8ff, #fff3d9, #dff5e7);
+        background-size: 500% 500%;
+        animation: atulGradient 60s ease-in-out infinite;
+      }
+      @keyframes atulGradient {
+        0% { background-position: 0% 50%; }
+        25% { background-position: 50% 100%; }
+        50% { background-position: 100% 50%; }
+        75% { background-position: 50% 0%; }
+        100% { background-position: 0% 50%; }
+      }
+      .floating-stars { position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 0; }
+      .floating-star { position: absolute; left: var(--x); top: 105vh; font-size: var(--size); opacity: 0; animation: starFloat var(--duration) linear infinite; animation-delay: var(--delay); filter: drop-shadow(0 0 6px rgba(255,255,255,.9)); }
+      @keyframes starFloat {
+        0% { transform: translate3d(0,0,0) rotate(0deg); opacity: 0; }
+        10% { opacity: .85; }
+        75% { opacity: .6; }
+        100% { transform: translate3d(var(--drift),-125vh,0) rotate(220deg); opacity: 0; }
+      }
+      .shell { position: relative; z-index: 1; }
+      .water-reminder { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; padding: 20px; background: rgba(20, 30, 35, .28); backdrop-filter: blur(4px); z-index: 50; }
+      .water-reminder.show { display: flex; }
+      .water-box { width: min(420px, 100%); padding: 24px; border-radius: 22px; background: rgba(255,255,255,.94); box-shadow: 0 20px 70px rgba(0,0,0,.18); text-align: center; }
+      .water-progress { height: 10px; border-radius: 999px; overflow: hidden; background: rgba(0,0,0,.08); margin: 14px 0 18px; }
+      .water-progress i { display:block; height:100%; width:0%; background: linear-gradient(90deg,#76c7ff,#7ee6b0,#ffd77a); transition: width .25s ease; }
+      .water-actions { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
+      .water-actions .btn { min-width:90px; }
+    </style>
+
+      <div class="shell">
       <header class="hero">
-        <div class="stars">✦　✧　★　✦　✧</div>
+        <div class="floating-stars" aria-hidden="true">${Array.from({ length: 36 }, (_, i) => `<span class="floating-star" style="--x:${(i * 37) % 100}%;--size:${12 + (i % 6) * 5}px;--duration:${14 + (i % 9) * 2}s;--delay:-${(i % 14) * 2}s;--drift:${-35 + (i % 8) * 10}px">${i % 3 === 0 ? '✦' : i % 3 === 1 ? '✧' : '★'}</span>`).join('')}</div>
         <div class="eyebrow">ATUL'S PERSONAL PLAYGROUND · OWNERSHIP: ATUL</div>
         <h1>ATUL<br><span>(PLAYGROUND)</span></h1>
         <p>A flexible personal workspace built around one objective: <b>12 hours of real focused work.</b></p>
@@ -124,13 +158,13 @@ function render() {
           ['calendar', 'Calendar'],
           ['posts', 'Posts'],
           ['tools', 'Tools']
-        ].map(([x, label], i) => `
-          <button class="navbtn ${i === 0 ? 'active' : ''}" data-view="${x}">${label}</button>
+        ].map(([x, label]) => `
+          <button class="navbtn ${activeView === x ? 'active' : ''}" data-view="${x}">${label}</button>
         `).join('')}
       </nav>
 
       <main>
-        <section id="today" class="view active">
+        <section id="today" class="view ${activeView === 'today' ? 'active' : ''}">
           <div class="stats">
             <article class="card">
               <small>TODAY'S FOCUS</small>
@@ -153,11 +187,10 @@ function render() {
           <article class="card section">
             <h2>⏱ Focus timer</h2>
             <div class="timer" id="timer">00:00:00</div>
-            <div class="muted" id="timerStatus">Timer is shared live across everyone viewing ATUL(PLAYGROUND).</div>
             <div class="controls">
               <button class="btn primary" id="start">Start focus</button>
               <button class="btn" id="pause">Pause</button>
-              <button class="btn" id="log">Log time</button>
+              <button class="btn" id="log">Log 60 min</button>
             </div>
           </article>
 
@@ -171,14 +204,14 @@ function render() {
           </article>
         </section>
 
-        <section id="schedule" class="view">
+        <section id="schedule" class="view ${activeView === 'schedule' ? 'active' : ''}">
           <article class="card">
             <h2>✨ Schedule / Edit a day</h2>
             <p class="muted">Choose any date. Edit, add, remove, and check off timetable blocks.</p>
 
             <div class="formrow">
               <label>Date
-                <input id="planDate" type="date" value="${today()}">
+                <input id="planDate" type="date" value="${selectedScheduleDate || today()}">
               </label>
               <label>Focus target (hours)
                 <input id="target" type="number" value="12" min="1" max="18" step=".5">
@@ -194,7 +227,7 @@ function render() {
           </article>
         </section>
 
-        <section id="calendar" class="view">
+        <section id="calendar" class="view ${activeView === 'calendar' ? 'active' : ''}">
           <article class="card">
             <h2>📅 Calendar</h2>
             <div class="calendar" id="calendarGrid"></div>
@@ -202,7 +235,7 @@ function render() {
           </article>
         </section>
 
-        <section id="posts" class="view">
+        <section id="posts" class="view ${activeView === 'posts' ? 'active' : ''}">
           <article class="card">
             <h2>📸 Posts</h2>
             <p class="muted">Wins, thoughts, pictures and motivation.</p>
@@ -213,10 +246,10 @@ function render() {
           <div id="postList" class="postgrid"></div>
         </section>
 
-        <section id="tools" class="view">
+        <section id="tools" class="view ${activeView === 'tools' ? 'active' : ''}">
           <div class="stats">
             <article class="card"><small>REAL FOCUS</small><strong>${fmt(sharedFocus)}</strong><small>Today</small></article>
-            <article class="card"><small>SESSIONS</small><strong data-shared-sessions>${d.sessions}</strong><small>Today · shared</small></article>
+            <article class="card"><small>SESSIONS</small><strong>${d.sessions}</strong><small>Today</small></article>
           </div>
           <article class="card section">
             <h2>📝 Quick note</h2>
@@ -228,17 +261,33 @@ function render() {
 
       <div class="toast pink">💗 i miss “us”</div>
       <div class="toast yellow">🍈 fresh focus fuel 🍈</div>
+      <div class="water-reminder" id="waterReminder" role="dialog" aria-modal="true" aria-labelledby="waterTitle">
+        <div class="water-box">
+          <h2 id="waterTitle">💧 Water break</h2>
+          <p>Time for a water break. Today's target: <b>4.0 L</b>.</p>
+          <strong id="waterAmount">0.0 L / 4.0 L</strong>
+          <div class="water-progress"><i id="waterBar"></i></div>
+          <div class="water-actions">
+            <button class="btn primary" id="water250">+250 ml</button>
+            <button class="btn primary" id="water500">+500 ml</button>
+            <button class="btn" id="water1000">+1 L</button>
+            <button class="btn" id="waterClose">Remind me later</button>
+          </div>
+        </div>
+      </div>
       <footer>Built for Atul ✦ ATUL(PLAYGROUND)</footer>
     </div>`;
 
   wire();
   renderTodayTimeline();
-  renderScheduleEditor(today());
+  renderScheduleEditor(selectedScheduleDate || today());
   renderCalendar();
   renderPosts();
 }
 
-async function loadCloud() {
+async function loadCloud(initial = false) {
+  if (cloud.loading) return;
+  cloud.loading = true;
   try {
     const [{ data: progress, error: progressError }, { data: posts, error: postsError }] = await Promise.all([
       supabase.from('progress').select('id,focus_minutes,progress_date,updated_at,plans,note,sessions,timer_running,timer_started_at,timer_seconds').eq('id', 1).maybeSingle(),
@@ -249,11 +298,18 @@ async function loadCloud() {
     if (postsError) throw postsError;
 
     if (!progress) {
-      const { data: created, error } = await supabase.from('progress').insert({ id: 1, focus_minutes: 0, progress_date: today(), plans: {}, note: '', sessions: 0, timer_running: false, timer_started_at: null, timer_seconds: 0 }).select().single();
+      const { data: created, error } = await supabase.from('progress').insert({
+        id: 1, focus_minutes: 0, progress_date: today(), plans: {}, note: '',
+        sessions: 0, timer_running: false, timer_started_at: null, timer_seconds: 0
+      }).select().single();
       if (error) throw error;
       cloud.progress = created;
     } else if (progress.progress_date !== today()) {
-      const { data: reset, error } = await supabase.from('progress').update({ focus_minutes: 0, progress_date: today(), sessions: 0, timer_running: false, timer_started_at: null, timer_seconds: 0, updated_at: new Date().toISOString() }).eq('id', 1).select().single();
+      const { data: reset, error } = await supabase.from('progress').update({
+        focus_minutes: 0, progress_date: today(), sessions: 0,
+        timer_running: false, timer_started_at: null, timer_seconds: 0,
+        updated_at: new Date().toISOString()
+      }).eq('id', 1).select().single();
       if (error) throw error;
       cloud.progress = reset;
     } else {
@@ -263,66 +319,68 @@ async function loadCloud() {
     cloud.posts = posts || [];
     if (cloud.progress?.plans) state.plans = cloud.progress.plans || {};
     if (typeof cloud.progress?.note === 'string') state.note = cloud.progress.note;
-    day().sessions = Number(cloud.progress?.sessions ?? day().sessions ?? 0);
+    state.days[today()] ||= { focus: 0, sessions: 0 };
+    state.days[today()].sessions = Number(cloud.progress?.sessions || 0);
     timer.running = !!cloud.progress?.timer_running;
     timer.seconds = Number(cloud.progress?.timer_seconds || 0);
-    timer.startedAt = cloud.progress?.timer_started_at ? new Date(cloud.progress.timer_started_at).getTime() - timer.seconds * 1000 : null;
+    timer.startedAt = cloud.progress?.timer_started_at
+      ? new Date(cloud.progress.timer_started_at).getTime() - timer.seconds * 1000
+      : null;
     save();
     cloud.ready = true;
-    refreshVisibleData();
   } catch (error) {
     console.error('Supabase error:', error);
     cloud.ready = false;
-    refreshVisibleData();
+  } finally {
+    cloud.loading = false;
+  }
+  if (initial) {
+    render();
+  } else {
+    updateVisibleCloudUI();
   }
 }
 
-function formatTimerSeconds(totalSeconds) {
-  const safe = Math.max(0, Number(totalSeconds) || 0);
-  const h = String(Math.floor(safe / 3600)).padStart(2, '0');
-  const m = String(Math.floor((safe % 3600) / 60)).padStart(2, '0');
-  const s = String(safe % 60).padStart(2, '0');
-  return `${h}:${m}:${s}`;
-}
+function updateVisibleCloudUI() {
+  const d = day();
+  const sharedFocus = Number(cloud.progress?.focus_minutes ?? d.focus ?? 0);
+  d.focus = sharedFocus;
+  save();
 
-function getDisplayedTimerSeconds() {
-  if (!timer.running || !timer.startedAt) return timer.seconds;
-  return Math.max(timer.seconds, Math.floor((Date.now() - timer.startedAt) / 1000));
-}
-
-function refreshVisibleData() {
-  renderTodayTimeline();
-  renderCalendar();
-  renderPosts();
   const focusEl = document.getElementById('focus');
-  if (focusEl) focusEl.textContent = fmt(Number(cloud.progress?.focus_minutes ?? day().focus ?? 0));
-  const timerEl = document.getElementById('timer');
-  if (timerEl) timerEl.textContent = formatTimerSeconds(getDisplayedTimerSeconds());
-  const statusEl = document.getElementById('timerStatus');
-  if (statusEl) statusEl.textContent = timer.running ? '🔴 Live focus timer — everyone can see it.' : 'Timer is shared live across everyone viewing ATUL(PLAYGROUND).';
-  document.querySelectorAll('[data-shared-sessions]').forEach(el => el.textContent = String(day().sessions));
+  if (focusEl) focusEl.textContent = fmt(sharedFocus);
+
+  const progressEl = document.querySelector('.progress i');
+  if (progressEl) progressEl.style.width = `${Math.min(100, Math.round(sharedFocus / DEFAULT_TARGET * 100))}%`;
+
+  // Refresh posts without rebuilding the whole app.
+  renderPosts();
 }
 
 setInterval(() => {
-  loadCloud();
+  loadCloud(false);
 }, 15000);
-
-setInterval(() => {
-  const t = document.getElementById('timer');
-  if (t) t.textContent = formatTimerSeconds(getDisplayedTimerSeconds());
-}, 1000);
 
 async function updateSharedFocus(delta) {
   const current = Number(cloud.progress?.focus_minutes || 0);
   const next = Math.max(0, current + delta);
-  const { data, error } = await supabase.from('progress').update({ focus_minutes: next, progress_date: today(), updated_at: new Date().toISOString(), plans: state.plans, note: state.note, sessions: day().sessions, timer_running: timer.running, timer_started_at: timer.startedAt ? new Date(timer.startedAt).toISOString() : null, timer_seconds: timer.seconds }).eq('id', 1).select().single();
+  const { data, error } = await supabase.from('progress').update({
+    focus_minutes: next, progress_date: today(), updated_at: new Date().toISOString(),
+    plans: state.plans, note: state.note, sessions: day().sessions,
+    timer_running: timer.running, timer_started_at: timer.startedAt ? new Date(timer.startedAt).toISOString() : null,
+    timer_seconds: timer.seconds
+  }).eq('id', 1).select().single();
   if (error) throw error;
   cloud.progress = data;
   return data;
 }
 
 async function resetSharedFocus() {
-  const { data, error } = await supabase.from('progress').update({ focus_minutes: 0, progress_date: today(), updated_at: new Date().toISOString(), plans: state.plans, note: state.note, sessions: 0, timer_running: false, timer_started_at: null, timer_seconds: 0 }).eq('id', 1).select().single();
+  const { data, error } = await supabase.from('progress').update({
+    focus_minutes: 0, progress_date: today(), updated_at: new Date().toISOString(),
+    plans: state.plans, note: state.note, sessions: 0,
+    timer_running: false, timer_started_at: null, timer_seconds: 0
+  }).eq('id', 1).select().single();
   if (error) throw error;
   cloud.progress = data;
 }
@@ -362,18 +420,26 @@ function subscribeToCloud() {
         state.note = payload.new.note || '';
         state.days[today()] ||= { focus: 0, sessions: 0 };
         state.days[today()].focus = Number(payload.new.focus_minutes || 0);
+        state.days[today()].sessions = Number(payload.new.sessions || 0);
+        timer.running = !!payload.new.timer_running;
+        timer.seconds = Number(payload.new.timer_seconds || 0);
+        timer.startedAt = payload.new.timer_started_at
+          ? new Date(payload.new.timer_started_at).getTime() - timer.seconds * 1000
+          : null;
         save();
-        refreshVisibleData();
+        updateVisibleCloudUI();
+        updateSharedTimerUI();
       }
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'posts' }, payload => {
-      loadCloud();
+      loadCloud(false);
     })
     .subscribe();
 }
 
 
 function switchView(view) {
+  currentView = view;
   document.querySelectorAll('.navbtn').forEach(x => {
     x.classList.toggle('active', x.dataset.view === view);
   });
@@ -382,13 +448,114 @@ function switchView(view) {
   });
 }
 
+function updateSharedTimerUI() {
+  const t = document.getElementById('timer');
+  if (t) t.textContent = formatTimer(timer.running ? Math.max(timer.seconds, Math.floor((Date.now() - timer.startedAt) / 1000)) : timer.seconds);
+}
+
+function formatTimer(seconds) {
+  const safe = Math.max(0, Number(seconds) || 0);
+  const h = String(Math.floor(safe / 3600)).padStart(2, '0');
+  const m = String(Math.floor((safe % 3600) / 60)).padStart(2, '0');
+  const s = String(safe % 60).padStart(2, '0');
+  return `${h}:${m}:${s}`;
+}
+
+async function saveTimerState() {
+  const { data, error } = await supabase.from('progress').update({
+    timer_running: timer.running,
+    timer_started_at: timer.startedAt ? new Date(timer.startedAt).toISOString() : null,
+    timer_seconds: timer.seconds,
+    sessions: day().sessions,
+    updated_at: new Date().toISOString()
+  }).eq('id', 1).select('id,focus_minutes,progress_date,updated_at,plans,note,sessions,timer_running,timer_started_at,timer_seconds').single();
+  if (error) throw error;
+  cloud.progress = data;
+}
+
+function getWaterState() {
+  const key = `atul_water_${today()}`;
+  const raw = JSON.parse(localStorage.getItem(key) || 'null') || { ml: 0, lastReminder: 0 };
+  raw.ml = Math.max(0, Math.min(4000, Number(raw.ml) || 0));
+  raw.lastReminder = Number(raw.lastReminder) || 0;
+  return { key, data: raw };
+}
+
+function saveWaterState() {
+  const { key, data } = getWaterState();
+  localStorage.setItem(key, JSON.stringify(data));
+  return data;
+}
+
+function updateWaterPopup() {
+  const { data } = getWaterState();
+  const amount = document.getElementById('waterAmount');
+  const bar = document.getElementById('waterBar');
+  if (amount) amount.textContent = `${(data.ml / 1000).toFixed(2)} L / 4.0 L`;
+  if (bar) bar.style.width = `${Math.min(100, data.ml / 40)}%`;
+  if (data.ml >= 4000) closeWaterReminder();
+}
+
+function showWaterReminder() {
+  const { data } = getWaterState();
+  if (data.ml >= 4000) return;
+  const popup = document.getElementById('waterReminder');
+  if (!popup) return;
+  popup.classList.add('show');
+  updateWaterPopup();
+}
+
+function closeWaterReminder() {
+  const popup = document.getElementById('waterReminder');
+  if (popup) popup.classList.remove('show');
+}
+
+function addWater(ml) {
+  const { key, data } = getWaterState();
+  data.ml = Math.min(4000, data.ml + ml);
+  data.lastReminder = Date.now();
+  localStorage.setItem(key, JSON.stringify(data));
+  updateWaterPopup();
+  if (data.ml >= 4000) {
+    alert('💧 4.0 L reached for today. Water reminders are finished for today.');
+  }
+}
+
+function startWaterReminderSystem() {
+  const { data } = getWaterState();
+  if (data.ml >= 4000) return;
+  const oneHour = 60 * 60 * 1000;
+  const maybeRemind = () => {
+    const current = getWaterState().data;
+    if (current.ml >= 4000) return;
+    if (!current.lastReminder || Date.now() - current.lastReminder >= oneHour) {
+      current.lastReminder = Date.now();
+      const { key } = getWaterState();
+      localStorage.setItem(key, JSON.stringify(current));
+      showWaterReminder();
+    }
+  };
+  setInterval(maybeRemind, 60 * 1000);
+  setTimeout(maybeRemind, oneHour);
+}
+
+function wireWaterReminder() {
+  document.getElementById('water250')?.addEventListener('click', () => addWater(250));
+  document.getElementById('water500')?.addEventListener('click', () => addWater(500));
+  document.getElementById('water1000')?.addEventListener('click', () => addWater(1000));
+  document.getElementById('waterClose')?.addEventListener('click', closeWaterReminder);
+  updateWaterPopup();
+  startWaterReminderSystem();
+}
+
 function wire() {
   document.querySelectorAll('.navbtn').forEach(b => {
     b.onclick = () => {
       switchView(b.dataset.view);
       if (b.dataset.view === 'schedule') {
         const input = document.getElementById('planDate');
-        renderScheduleEditor(input?.value || today());
+        selectedScheduleDate = input?.value || selectedScheduleDate || today();
+        renderScheduleEditor(selectedScheduleDate);
       }
     };
   });
@@ -398,10 +565,8 @@ function wire() {
     timer.running = true;
     timer.startedAt = Date.now() - timer.seconds * 1000;
     try {
-      const { data, error } = await supabase.from('progress').update({ timer_running: true, timer_started_at: new Date(timer.startedAt).toISOString(), timer_seconds: timer.seconds, sessions: day().sessions, updated_at: new Date().toISOString() }).eq('id', 1).select().single();
-      if (error) throw error;
-      cloud.progress = data;
-      refreshVisibleData();
+      await saveTimerState();
+      updateSharedTimerUI();
       tick();
     } catch (error) {
       timer.running = false;
@@ -412,14 +577,12 @@ function wire() {
 
   document.getElementById('pause').onclick = async () => {
     if (!timer.running) return;
-    timer.seconds = getDisplayedTimerSeconds();
+    timer.seconds = Math.max(timer.seconds, Math.floor((Date.now() - timer.startedAt) / 1000));
     timer.running = false;
     timer.startedAt = null;
     try {
-      const { data, error } = await supabase.from('progress').update({ timer_running: false, timer_started_at: null, timer_seconds: timer.seconds, sessions: day().sessions, updated_at: new Date().toISOString() }).eq('id', 1).select().single();
-      if (error) throw error;
-      cloud.progress = data;
-      refreshVisibleData();
+      await saveTimerState();
+      updateSharedTimerUI();
     } catch (error) {
       console.error(error);
       alert('Could not pause the shared timer. Check the Supabase setup.');
@@ -430,12 +593,15 @@ function wire() {
     const raw = prompt('How many minutes do you want to log?', '60');
     if (raw === null) return;
     const minutes = Number(raw);
-    if (!Number.isFinite(minutes) || minutes <= 0 || minutes > 1440) { alert('Enter a number of minutes between 1 and 1440.'); return; }
+    if (!Number.isFinite(minutes) || minutes <= 0 || minutes > 1440) {
+      alert('Enter a number of minutes between 1 and 1440.');
+      return;
+    }
     try {
       day().sessions++;
       save();
       await updateSharedFocus(minutes);
-      refreshVisibleData();
+      updateVisibleCloudUI();
     } catch (error) {
       console.error(error);
       alert('Could not update shared progress. Check the Supabase setup.');
@@ -448,7 +614,8 @@ function wire() {
       state.days[today()] = { focus: 0, sessions: 0 };
       save();
       await resetSharedFocus();
-      render();
+      updateVisibleCloudUI();
+      updateSharedTimerUI();
     } catch (error) {
       console.error(error);
       alert('Could not reset shared progress. Check the Supabase setup.');
@@ -457,13 +624,15 @@ function wire() {
 
   document.getElementById('editToday').onclick = () => {
     switchView('schedule');
+    selectedScheduleDate = today();
     const input = document.getElementById('planDate');
-    input.value = today();
-    renderScheduleEditor(today());
+    input.value = selectedScheduleDate;
+    renderScheduleEditor(selectedScheduleDate);
   };
 
   document.getElementById('planDate').onchange = e => {
-    renderScheduleEditor(e.target.value);
+    selectedScheduleDate = e.target.value || today();
+    renderScheduleEditor(selectedScheduleDate);
   };
 
   document.getElementById('addBlock').onclick = () => addBlock();
@@ -677,6 +846,7 @@ function renderCalendar() {
     btn.onclick = () => {
       const date = btn.dataset.date;
       switchView('schedule');
+      selectedScheduleDate = date;
       document.getElementById('planDate').value = date;
       renderScheduleEditor(date);
     };
@@ -686,8 +856,7 @@ function renderCalendar() {
 function tick() {
   if (!timer.running) return;
   timer.seconds = Math.max(timer.seconds, Math.floor((Date.now() - timer.startedAt) / 1000));
-  const t = document.getElementById('timer');
-  if (t) t.textContent = formatTimerSeconds(timer.seconds);
+  updateSharedTimerUI();
   requestAnimationFrame(tick);
 }
 
@@ -706,6 +875,7 @@ function escapeAttr(s) {
 }
 
 render();
-loadCloud();
+wireWaterReminder();
+loadCloud(true);
 subscribeToCloud();
 
