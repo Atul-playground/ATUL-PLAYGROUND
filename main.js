@@ -240,7 +240,7 @@ function render() {
 async function loadCloud() {
   try {
     const [{ data: progress, error: progressError }, { data: posts, error: postsError }] = await Promise.all([
-      supabase.from('progress').select('id,focus_minutes,progress_date,updated_at').eq('id', 1).maybeSingle(),
+      supabase.from('progress').select('id,focus_minutes,progress_date,updated_at,plans,note').eq('id', 1).maybeSingle(),
       supabase.from('posts').select('id,caption,image_url,created_at').order('created_at', { ascending: false })
     ]);
 
@@ -248,7 +248,7 @@ async function loadCloud() {
     if (postsError) throw postsError;
 
     if (!progress) {
-      const { data: created, error } = await supabase.from('progress').insert({ id: 1, focus_minutes: 0, progress_date: today() }).select().single();
+      const { data: created, error } = await supabase.from('progress').insert({ id: 1, focus_minutes: 0, progress_date: today(), plans: {}, note: '' }).select().single();
       if (error) throw error;
       cloud.progress = created;
     } else if (progress.progress_date !== today()) {
@@ -260,6 +260,9 @@ async function loadCloud() {
     }
 
     cloud.posts = posts || [];
+    if (cloud.progress?.plans) state.plans = cloud.progress.plans || {};
+    if (typeof cloud.progress?.note === 'string') state.note = cloud.progress.note;
+    save();
     cloud.ready = true;
     render();
   } catch (error) {
@@ -276,16 +279,57 @@ setInterval(() => {
 async function updateSharedFocus(delta) {
   const current = Number(cloud.progress?.focus_minutes || 0);
   const next = Math.max(0, current + delta);
-  const { data, error } = await supabase.from('progress').update({ focus_minutes: next, progress_date: today(), updated_at: new Date().toISOString() }).eq('id', 1).select().single();
+  const { data, error } = await supabase.from('progress').update({ focus_minutes: next, progress_date: today(), updated_at: new Date().toISOString(), plans: state.plans, note: state.note }).eq('id', 1).select().single();
   if (error) throw error;
   cloud.progress = data;
   return data;
 }
 
 async function resetSharedFocus() {
-  const { data, error } = await supabase.from('progress').update({ focus_minutes: 0, progress_date: today(), updated_at: new Date().toISOString() }).eq('id', 1).select().single();
+  const { data, error } = await supabase.from('progress').update({ focus_minutes: 0, progress_date: today(), updated_at: new Date().toISOString(), plans: state.plans, note: state.note }).eq('id', 1).select().single();
   if (error) throw error;
   cloud.progress = data;
+}
+
+
+async function saveSharedState() {
+  const { data, error } = await supabase
+    .from('progress')
+    .update({
+      plans: state.plans,
+      note: state.note,
+      updated_at: new Date().toISOString(),
+      progress_date: today()
+    })
+    .eq('id', 1)
+    .select('id,focus_minutes,progress_date,updated_at,plans,note')
+    .single();
+  if (error) throw error;
+  cloud.progress = data;
+  state.plans = data.plans || {};
+  state.note = data.note || '';
+  save();
+  return data;
+}
+
+function subscribeToCloud() {
+  supabase
+    .channel('atul-playground-sync')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'progress' }, payload => {
+      if (payload.new && payload.new.id === 1) {
+        cloud.progress = payload.new;
+        state.plans = payload.new.plans || {};
+        state.note = payload.new.note || '';
+        state.days[today()] ||= { focus: 0, sessions: 0 };
+        state.days[today()].focus = Number(payload.new.focus_minutes || 0);
+        save();
+        render();
+      }
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'posts' }, payload => {
+      loadCloud();
+    })
+    .subscribe();
 }
 
 
@@ -374,8 +418,14 @@ function wire() {
     };
 
     save();
-    renderTodayTimeline();
-    alert(`Schedule saved for ${formatDate(date)}.`);
+    saveSharedState().then(() => {
+      renderTodayTimeline();
+      renderCalendar();
+      alert(`Schedule saved for ${formatDate(date)}.`);
+    }).catch(error => {
+      console.error(error);
+      alert(`Schedule saved locally, but cloud sync failed: ${error.message || error}`);
+    });
   };
 
   document.getElementById('publish').onclick = async () => {
@@ -412,10 +462,16 @@ function wire() {
     }
   };
 
-  document.getElementById('saveNote').onclick = () => {
+  document.getElementById('saveNote').onclick = async () => {
     state.note = document.getElementById('note').value;
     save();
-    alert('Note saved.');
+    try {
+      await saveSharedState();
+      alert('Shared note saved.');
+    } catch (error) {
+      console.error(error);
+      alert(`Note saved locally, but cloud sync failed: ${error.message || error}`);
+    }
   };
 }
 
@@ -487,6 +543,7 @@ function renderTodayTimeline() {
       state.plans[today()] = current;
       save();
       row.classList.toggle('completed', checkbox.checked);
+      saveSharedState().catch(error => console.error('Schedule sync error:', error));
     };
 
     row.append(checkbox, time, title);
@@ -589,4 +646,5 @@ function escapeAttr(s) {
 
 render();
 loadCloud();
+subscribeToCloud();
 
