@@ -1,7 +1,20 @@
 import './style.css';
 
-const KEY = 'atul_playground_v3';
+const KEY = 'atul_playground_v4';
 const TARGET = 12 * 60;
+
+const pad = n => String(n).padStart(2, '0');
+const localDateKey = (date = new Date()) =>
+  `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+
+const tomorrow = () => {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  return localDateKey(d);
+};
+
+const fmt = mins => `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, '0')}m`;
+
 const DEFAULT_BLOCKS = [
   ['05:30–08:00', 'Focus block'],
   ['08:00–08:30', 'Breakfast / reset'],
@@ -15,73 +28,160 @@ const DEFAULT_BLOCKS = [
   ['20:30–23:00', 'Focus block']
 ];
 
-const pad = n => String(n).padStart(2, '0');
-const localDate = (date = new Date()) =>
-  `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-const tomorrow = () => {
-  const d = new Date();
-  d.setDate(d.getDate() + 1);
-  return localDate(d);
-};
-const fmt = mins =>
-  `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, '0')}m`;
+const makeDefaultBlocks = () =>
+  DEFAULT_BLOCKS.map(([time, title]) => ({ time, title, done: false }));
 
-let state;
-try {
-  state = JSON.parse(localStorage.getItem(KEY) || 'null');
-} catch {
-  state = null;
-}
-state ||= { days: {}, plans: {}, posts: [], note: '' };
-state.days ||= {};
-state.plans ||= {};
-state.posts ||= [];
-state.note ||= '';
+let state = JSON.parse(localStorage.getItem(KEY) || 'null') || {
+  days: {},
+  plans: {},
+  posts: [],
+  note: ''
+};
 
 let timer = { running: false, seconds: 0, startedAt: null };
-let selectedScheduleDate = tomorrow();
-
-const save = () => localStorage.setItem(KEY, JSON.stringify(state));
-
-function ensureDay(date = localDate()) {
-  state.days[date] ||= { focus: 0, sessions: 0 };
-  state.days[date].focus ||= 0;
-  state.days[date].sessions ||= 0;
-  return state.days[date];
-}
-
-function defaultBlocks() {
-  return DEFAULT_BLOCKS.map(([time, title]) => ({ time, title, done: false }));
-}
-
-function normalisePlan(plan) {
-  if (!Array.isArray(plan)) return null;
-  return plan.map(block => ({
-    time: String(block?.time ?? ''),
-    title: String(block?.title ?? 'Focus block'),
-    done: Boolean(block?.done)
-  }));
-}
-
-function getPlan(date) {
-  const existing = normalisePlan(state.plans[date]);
-  if (existing) {
-    state.plans[date] = existing;
-    return existing;
-  }
-  const fresh = defaultBlocks();
-  state.plans[date] = fresh;
-  return fresh;
-}
+let selectedScheduleDate = localDateKey();
 
 const app = document.querySelector('#app');
 
+const save = () => localStorage.setItem(KEY, JSON.stringify(state));
+
+const day = date => {
+  const key = date || localDateKey();
+  if (!state.days[key]) state.days[key] = { focus: 0, sessions: 0 };
+  return state.days[key];
+};
+
+function getPlan(date) {
+  const saved = state.plans[date];
+
+  if (Array.isArray(saved)) {
+    return {
+      target: 12,
+      blocks: saved.map(b => ({
+        time: b.time || '',
+        title: b.title || 'Focus block',
+        done: Boolean(b.done)
+      }))
+    };
+  }
+
+  if (saved && typeof saved === 'object') {
+    return {
+      target: Number(saved.target) || 12,
+      blocks: Array.isArray(saved.blocks)
+        ? saved.blocks.map(b => ({
+            time: b.time || '',
+            title: b.title || 'Focus block',
+            done: Boolean(b.done)
+          }))
+        : makeDefaultBlocks()
+    };
+  }
+
+  return { target: 12, blocks: makeDefaultBlocks() };
+}
+
+function setPlan(date, plan) {
+  state.plans[date] = {
+    target: Number(plan.target) || 12,
+    blocks: plan.blocks.map(b => ({
+      time: b.time || '',
+      title: b.title || 'Focus block',
+      done: Boolean(b.done)
+    }))
+  };
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[c]));
+}
+
 function render() {
-  const d = ensureDay();
+  const todayKey = localDateKey();
+  const d = day(todayKey);
   const pct = Math.min(100, Math.round(d.focus / TARGET * 100));
-  const todayPlan = getPlan(localDate());
+  const todayPlan = getPlan(todayKey);
 
   app.innerHTML = `
+    <style>
+      .floating-stars {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        overflow: hidden;
+        z-index: 0;
+      }
+      .floating-star {
+        position: absolute;
+        left: var(--x);
+        top: 105vh;
+        font-size: var(--size);
+        opacity: 0;
+        animation: starFloat var(--duration) linear infinite;
+        animation-delay: var(--delay);
+        filter: drop-shadow(0 0 5px rgba(255,255,255,.8));
+      }
+      @keyframes starFloat {
+        0% { transform: translate3d(0, 0, 0) rotate(0deg); opacity: 0; }
+        12% { opacity: .7; }
+        75% { opacity: .55; }
+        100% { transform: translate3d(var(--drift), -125vh, 0) rotate(180deg); opacity: 0; }
+      }
+      .shell { position: relative; z-index: 1; }
+      .timeline-check {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
+      }
+      .timeline-check input[type="checkbox"] {
+        width: 19px;
+        height: 19px;
+        flex: 0 0 auto;
+        accent-color: #5fbd7b;
+        cursor: pointer;
+      }
+      .timeline-check.done span {
+        text-decoration: line-through;
+        opacity: .55;
+      }
+      .edit-today-row {
+        display: flex;
+        justify-content: flex-end;
+        margin-top: 14px;
+      }
+      .block {
+        display: grid;
+        grid-template-columns: 1fr 1.5fr auto;
+        gap: 10px;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+      .block-done {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        white-space: nowrap;
+      }
+      @media (max-width: 700px) {
+        .block { grid-template-columns: 1fr; }
+        .block-done { justify-content: flex-start; }
+      }
+    </style>
+
+    <div class="floating-stars" aria-hidden="true">
+      ${Array.from({ length: 18 }, (_, i) => `
+        <span class="floating-star"
+          style="--x:${(i * 17 + 4) % 100}%;--size:${10 + (i % 4) * 4}px;--duration:${13 + (i % 7) * 2}s;--delay:-${i * 1.7}s;--drift:${-35 + (i % 9) * 9}px">✦</span>
+      `).join('')}
+    </div>
+
     <div class="shell">
       <header class="hero">
         <div class="stars">✦　✧　★　✦　✧</div>
@@ -91,14 +191,10 @@ function render() {
       </header>
 
       <nav class="nav">
-        ${[
-          ['today', 'Today'],
-          ['schedule', 'Schedule / Edit'],
-          ['calendar', 'Calendar'],
-          ['posts', 'Posts'],
-          ['tools', 'Tools']
-        ].map(([view, label], i) => `
-          <button class="navbtn ${i === 0 ? 'active' : ''}" data-view="${view}">${label}</button>
+        ${['today','schedule','calendar','posts','tools'].map((x, i) => `
+          <button class="navbtn ${i === 0 ? 'active' : ''}" data-view="${x}">
+            ${({today:'Today',schedule:'Schedule / Edit',calendar:'Calendar',posts:'Posts',tools:'Tools'})[x]}
+          </button>
         `).join('')}
       </nav>
 
@@ -118,7 +214,7 @@ function render() {
             </article>
             <article class="card">
               <small>TODAY</small>
-              <strong>${new Date().toLocaleDateString(undefined, {day:'numeric', month:'short'})}</strong>
+              <strong>${new Date().toLocaleDateString(undefined,{day:'numeric',month:'short'})}</strong>
               <button class="btn" id="resetDay">Reset today's record</button>
             </article>
           </div>
@@ -134,18 +230,21 @@ function render() {
           </article>
 
           <article class="card section">
-            <div class="section-title-row">
-              <div>
-                <h2>🗓 Today's flexible timeline</h2>
-                <div class="notice">Tick a block when you complete it. You can edit today's schedule whenever you need.</div>
-              </div>
-              <button class="btn primary" id="editToday">✏️ Edit today</button>
+            <h2>🗓 Today's flexible timeline</h2>
+            <div class="notice">Move breaks and meals when life changes. Protect the total focus target rather than a rigid clock.</div>
+            <div class="timeline" id="todayTimeline">
+              ${todayPlan.blocks.map((b, i) => `
+                <div class="slot">
+                  <label class="timeline-check ${b.done ? 'done' : ''}">
+                    <input type="checkbox" class="today-check" data-index="${i}" ${b.done ? 'checked' : ''}>
+                    <b>${escapeHtml(b.time)}</b>
+                    <span>${escapeHtml(b.title)}</span>
+                  </label>
+                </div>
+              `).join('')}
             </div>
-
-            <div class="timeline">
-              ${todayPlan.length
-                ? todayPlan.map((block, i) => timelineBlock(block, i)).join('')
-                : '<div class="empty">No blocks yet. Click “Edit today” to add one.</div>'}
+            <div class="edit-today-row">
+              <button class="btn primary" id="editToday">✏️ Edit today's schedule</button>
             </div>
           </article>
         </section>
@@ -157,20 +256,17 @@ function render() {
 
             <div class="formrow">
               <label>Date
-                <input id="planDate" type="date" value="${escapeAttr(selectedScheduleDate)}">
+                <input id="planDate" type="date" value="${selectedScheduleDate}">
               </label>
               <label>Focus target (hours)
-                <input id="target" type="number" value="12" min="1" max="18" step=".5">
+                <input id="target" type="number" value="${getPlan(selectedScheduleDate).target}" min="1" max="18" step=".5">
               </label>
             </div>
 
             <div id="blocks"></div>
 
-            <div class="controls">
-              <button class="btn" id="addBlock">＋ Add block</button>
-              <button class="btn primary" id="savePlan">💾 Save schedule</button>
-            </div>
-            <p class="muted" id="scheduleStatus"></p>
+            <button class="btn" id="addBlock">＋ Add block</button>
+            <button class="btn primary" id="savePlan">💾 Save schedule</button>
           </article>
         </section>
 
@@ -178,7 +274,7 @@ function render() {
           <article class="card">
             <h2>📅 Calendar</h2>
             <div class="calendar" id="calendarGrid"></div>
-            <p class="muted">Click any date to open and edit that day's schedule.</p>
+            <p class="muted">Click any date to edit its schedule. Days with logged focus show their total.</p>
           </article>
         </section>
 
@@ -209,33 +305,35 @@ function render() {
       <div class="toast pink">💗 i miss “us”</div>
       <div class="toast yellow">🍈 fresh focus fuel 🍈</div>
       <footer>Built for Atul ✦ ATUL(PLAYGROUND)</footer>
-    </div>`;
+    </div>
+  `;
 
   wire();
-  renderScheduleEditor(selectedScheduleDate);
+  renderEditorBlocks(selectedScheduleDate);
   renderCalendar();
   renderPosts();
 }
 
-function timelineBlock(block, index) {
-  return `
-    <label class="slot" style="cursor:pointer;display:flex;align-items:center;gap:12px;">
-      <input
-        type="checkbox"
-        class="timeline-check"
-        data-index="${index}"
-        ${block.done ? 'checked' : ''}
-        aria-label="Mark ${escapeAttr(block.title)} complete"
-        style="width:18px;height:18px;flex:0 0 auto;"
-      >
-      <b style="${block.done ? 'text-decoration:line-through;opacity:.6;' : ''}">${escapeHtml(block.time)}</b>
-      <span style="${block.done ? 'text-decoration:line-through;opacity:.6;' : ''}">${escapeHtml(block.title)}</span>
-    </label>`;
+function showView(view) {
+  document.querySelectorAll('.navbtn').forEach(x =>
+    x.classList.toggle('active', x.dataset.view === view)
+  );
+  document.querySelectorAll('.view').forEach(x =>
+    x.classList.toggle('active', x.id === view)
+  );
+}
+
+function openSchedule(date) {
+  selectedScheduleDate = date || localDateKey();
+  showView('schedule');
+  const input = document.getElementById('planDate');
+  if (input) input.value = selectedScheduleDate;
+  renderEditorBlocks(selectedScheduleDate);
 }
 
 function wire() {
-  document.querySelectorAll('.navbtn').forEach(button => {
-    button.onclick = () => showView(button.dataset.view);
+  document.querySelectorAll('.navbtn').forEach(b => {
+    b.onclick = () => showView(b.dataset.view);
   });
 
   document.getElementById('start').onclick = () => {
@@ -246,67 +344,73 @@ function wire() {
   };
 
   document.getElementById('pause').onclick = () => {
-    if (timer.running) {
-      timer.seconds = Math.floor((Date.now() - timer.startedAt) / 1000);
-    }
     timer.running = false;
   };
 
   document.getElementById('log').onclick = () => {
-    ensureDay().focus += 60;
-    ensureDay().sessions++;
+    day().focus += 60;
+    day().sessions++;
     save();
     render();
   };
 
   document.getElementById('resetDay').onclick = () => {
     if (confirm("Reset today's focus record?")) {
-      state.days[localDate()] = { focus: 0, sessions: 0 };
+      state.days[localDateKey()] = { focus: 0, sessions: 0 };
       save();
       render();
     }
   };
 
-  document.querySelectorAll('.timeline-check').forEach(check => {
-    check.onchange = () => {
-      const plan = getPlan(localDate());
-      const index = Number(check.dataset.index);
-      if (!plan[index]) return;
-      plan[index].done = check.checked;
-      save();
-      const slot = check.closest('.slot');
-      if (slot) {
-        slot.querySelectorAll('b, span').forEach(el => {
-          el.style.textDecoration = check.checked ? 'line-through' : '';
-          el.style.opacity = check.checked ? '.6' : '';
-        });
+  document.getElementById('editToday').onclick = () => openSchedule(localDateKey());
+
+  document.getElementById('planDate').onchange = e => {
+    selectedScheduleDate = e.target.value || localDateKey();
+    renderEditorBlocks(selectedScheduleDate);
+  };
+
+  document.getElementById('addBlock').onclick = () => {
+    addBlock();
+  };
+
+  document.getElementById('savePlan').onclick = () => {
+    const date = document.getElementById('planDate').value || localDateKey();
+    const target = Number(document.getElementById('target').value) || 12;
+
+    const blocks = [...document.querySelectorAll('.block')].map(b => ({
+      time: b.querySelector('.bt').value,
+      title: b.querySelector('.bn').value,
+      done: b.querySelector('.block-check').checked
+    }));
+
+    setPlan(date, { target, blocks });
+    selectedScheduleDate = date;
+    save();
+    alert('Schedule saved.');
+    render();
+    showView('schedule');
+  };
+
+  document.querySelectorAll('.today-check').forEach(cb => {
+    cb.onchange = () => {
+      const index = Number(cb.dataset.index);
+      const plan = getPlan(localDateKey());
+      if (plan.blocks[index]) {
+        plan.blocks[index].done = cb.checked;
+        setPlan(localDateKey(), plan);
+        save();
+        cb.closest('.timeline-check').classList.toggle('done', cb.checked);
       }
     };
   });
 
-  document.getElementById('editToday').onclick = () => {
-    selectedScheduleDate = localDate();
-    showView('schedule');
-  };
-
-  document.getElementById('planDate').onchange = event => {
-    selectedScheduleDate = event.target.value || localDate();
-    renderScheduleEditor(selectedScheduleDate);
-  };
-
-  document.getElementById('addBlock').onclick = () => {
-    const container = document.getElementById('blocks');
-    if (!container) return;
-    container.appendChild(blockEditor({time: '', title: 'Focus block', done: false}, container.children.length));
-  };
-
-  document.getElementById('savePlan').onclick = saveCurrentPlan;
-
   document.getElementById('publish').onclick = () => {
     const text = document.getElementById('postText').value.trim();
     const file = document.getElementById('postImage').files[0];
+
     if (!text && !file) return;
     if (!file) return pushPost(text, '');
+
     const reader = new FileReader();
     reader.onload = () => pushPost(text, reader.result);
     reader.readAsDataURL(file);
@@ -319,118 +423,72 @@ function wire() {
   };
 }
 
-function showView(view) {
-  document.querySelectorAll('.navbtn').forEach(button => {
-    button.classList.toggle('active', button.dataset.view === view);
-  });
-  document.querySelectorAll('.view').forEach(section => {
-    section.classList.toggle('active', section.id === view);
-  });
-  if (view === 'schedule') renderScheduleEditor(selectedScheduleDate);
-}
-
-function renderScheduleEditor(date) {
-  const dateInput = document.getElementById('planDate');
+function renderEditorBlocks(date) {
   const container = document.getElementById('blocks');
-  if (!dateInput || !container) return;
-
-  selectedScheduleDate = date || localDate();
-  dateInput.value = selectedScheduleDate;
-
-  const plan = getPlan(selectedScheduleDate);
-  container.innerHTML = plan.map((block, index) => blockEditor(block, index)).join('');
-
   const target = document.getElementById('target');
-  const savedTarget = state.days[selectedScheduleDate]?.targetHours;
-  if (target) target.value = savedTarget ?? 12;
 
-  container.querySelectorAll('.remove').forEach(button => {
-    button.onclick = () => button.closest('.block')?.remove();
-  });
+  if (!container || !target) return;
+
+  const plan = getPlan(date);
+  target.value = plan.target;
+  container.innerHTML = '';
+
+  plan.blocks.forEach(block => addBlock(block.time, block.title, block.done));
 }
 
-function blockEditor(block, index) {
-  const wrapper = document.createElement('div');
-  wrapper.className = 'block';
-  wrapper.dataset.index = index;
+function addBlock(time = '', title = 'Focus block', done = false) {
+  const container = document.getElementById('blocks');
+  if (!container) return;
 
-  const time = document.createElement('input');
-  time.className = 'bt';
-  time.placeholder = 'Time';
-  time.value = block.time;
+  const el = document.createElement('div');
+  el.className = 'block';
 
-  const title = document.createElement('input');
-  title.className = 'bn';
-  title.placeholder = 'Block name';
-  title.value = block.title;
+  el.innerHTML = `
+    <input class="bt" placeholder="Time" value="${escapeHtml(time)}">
+    <input class="bn" placeholder="Block name" value="${escapeHtml(title)}">
+    <label class="block-done">
+      <input type="checkbox" class="block-check" ${done ? 'checked' : ''}>
+      Done
+    </label>
+    <button class="btn danger remove" type="button">Remove</button>
+  `;
 
-  const doneLabel = document.createElement('label');
-  doneLabel.style.cssText = 'display:flex;align-items:center;gap:6px;white-space:nowrap;';
-  const done = document.createElement('input');
-  done.type = 'checkbox';
-  done.className = 'bdone';
-  done.checked = Boolean(block.done);
-  doneLabel.append(done, document.createTextNode('Done'));
-
-  const remove = document.createElement('button');
-  remove.className = 'btn danger remove';
-  remove.type = 'button';
-  remove.textContent = 'Remove';
-
-  wrapper.append(time, title, doneLabel, remove);
-  return wrapper;
-}
-
-function saveCurrentPlan() {
-  const date = document.getElementById('planDate').value;
-  if (!date) {
-    alert('Please choose a date.');
-    return;
-  }
-
-  selectedScheduleDate = date;
-
-  const blocks = [...document.querySelectorAll('#blocks .block')].map(block => ({
-    time: block.querySelector('.bt')?.value.trim() || '',
-    title: block.querySelector('.bn')?.value.trim() || 'Untitled block',
-    done: Boolean(block.querySelector('.bdone')?.checked)
-  })).filter(block => block.time || block.title);
-
-  state.plans[date] = blocks;
-
-  const targetHours = Number(document.getElementById('target')?.value || 12);
-  ensureDay(date).targetHours = Number.isFinite(targetHours) ? targetHours : 12;
-
-  save();
-
-  const status = document.getElementById('scheduleStatus');
-  if (status) status.textContent = `✓ Saved schedule for ${date}.`;
-  render();
-  showView('schedule');
-  const newStatus = document.getElementById('scheduleStatus');
-  if (newStatus) newStatus.textContent = `✓ Saved schedule for ${date}.`;
+  el.querySelector('.remove').onclick = () => el.remove();
+  container.appendChild(el);
 }
 
 function pushPost(text, img) {
   state.posts.push({ text, img, date: Date.now() });
   save();
-  document.getElementById('postText').value = '';
-  document.getElementById('postImage').value = '';
+
+  const textEl = document.getElementById('postText');
+  const imageEl = document.getElementById('postImage');
+
+  if (textEl) textEl.value = '';
+  if (imageEl) imageEl.value = '';
+
   renderPosts();
 }
 
 function renderPosts() {
   const list = document.getElementById('postList');
   if (!list) return;
+
   if (!state.posts.length) {
     list.innerHTML = '<div class="card empty">No posts yet. Make the first one ✦</div>';
     return;
   }
+
   list.innerHTML = [...state.posts].reverse().map(p => `
     <article class="post card">
-      ${p.img ? `<img src="${escapeAttr(p.img)}" alt="Post image">` : ''}
-      <div><b>Atul</b><p>${escapeHtml(p.text || '')}</p><small>${new Date(p.date).toLocaleString()}</small></div>
-    </article>`).join('');
+      ${p.img ? `<img src="${p.img}" alt="Post image">` : ''}
+      <div>
+        <b>Atul</b>
+        <p>${escapeHtml(p.text || '')}</p>
+        <small>${new Date(p.date).toLocaleString()}</small>
+      </div>
+    </article>
+  `).join('');
 }
 
 function renderCalendar() {
@@ -443,57 +501,45 @@ function renderCalendar() {
   const first = new Date(y, m, 1).getDay();
   const days = new Date(y, m + 1, 0).getDate();
 
-  let html = `<div class="calhead">${now.toLocaleDateString(undefined, {month:'long', year:'numeric'})}</div>`;
-  for (let i = 0; i < (first + 6) % 7; i++) html += '<div></div>';
+  let html = `<div class="calhead">${now.toLocaleDateString(undefined,{month:'long',year:'numeric'})}</div>`;
+
+  for (let i = 0; i < (first + 6) % 7; i++) {
+    html += '<div></div>';
+  }
 
   for (let n = 1; n <= days; n++) {
     const k = `${y}-${pad(m + 1)}-${pad(n)}`;
     const f = state.days[k]?.focus || 0;
-    const hasPlan = Array.isArray(state.plans[k]);
+    const isToday = k === localDateKey();
+
     html += `
-      <button type="button" class="calday ${k === localDate() ? 'today' : ''}" data-date="${k}"
-        style="border:0;background:transparent;cursor:pointer;">
+      <button type="button" class="calday ${isToday ? 'today' : ''}" data-date="${k}">
         <b>${n}</b>
-        <small>${f ? fmt(f) : hasPlan ? 'Schedule' : ''}</small>
-      </button>`;
+        <small>${f ? fmt(f) : ''}</small>
+      </button>
+    `;
   }
 
   el.innerHTML = html;
 
   el.querySelectorAll('.calday').forEach(button => {
-    button.onclick = () => {
-      selectedScheduleDate = button.dataset.date;
-      showView('schedule');
-    };
+    button.onclick = () => openSchedule(button.dataset.date);
   });
 }
 
 function tick() {
   if (!timer.running) return;
+
   timer.seconds = Math.floor((Date.now() - timer.startedAt) / 1000);
 
   const h = String(Math.floor(timer.seconds / 3600)).padStart(2, '0');
   const m = String(Math.floor((timer.seconds % 3600) / 60)).padStart(2, '0');
   const s = String(timer.seconds % 60).padStart(2, '0');
 
-  const timerEl = document.getElementById('timer');
-  if (timerEl) timerEl.textContent = `${h}:${m}:${s}`;
+  const t = document.getElementById('timer');
+  if (t) t.textContent = `${h}:${m}:${s}`;
 
   requestAnimationFrame(tick);
-}
-
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, char => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;'
-  }[char]));
-}
-
-function escapeAttr(value) {
-  return escapeHtml(value);
 }
 
 render();
