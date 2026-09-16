@@ -134,13 +134,23 @@ function render() {
         100% { transform: translate3d(var(--drift),-125vh,0) rotate(220deg); opacity: 0; }
       }
       .shell { position: relative; z-index: 1; }
-      .water-reminder { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; padding: 20px; background: rgba(20, 30, 35, .28); backdrop-filter: blur(4px); z-index: 50; }
-      .water-reminder.show { display: flex; }
-      .water-box { width: min(420px, 100%); padding: 24px; border-radius: 22px; background: rgba(255,255,255,.94); box-shadow: 0 20px 70px rgba(0,0,0,.18); text-align: center; }
-      .water-progress { height: 10px; border-radius: 999px; overflow: hidden; background: rgba(0,0,0,.08); margin: 14px 0 18px; }
-      .water-progress i { display:block; height:100%; width:0%; background: linear-gradient(90deg,#76c7ff,#7ee6b0,#ffd77a); transition: width .25s ease; }
-      .water-actions { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
-      .water-actions .btn { min-width:90px; }
+      .water-reminder { position: fixed; right: 22px; bottom: 22px; display: none; width: min(300px, calc(100vw - 36px)); z-index: 50; }
+      .water-reminder.show { display: block; animation: waterPop .35s ease-out; }
+      .water-box { position: relative; overflow: hidden; padding: 16px; border-radius: 20px; background: rgba(255,255,255,.96); border: 1px solid rgba(75,130,110,.18); box-shadow: 0 14px 40px rgba(0,0,0,.16); }
+      .water-box::before, .water-box::after { content: ''; position:absolute; border-radius:50%; background: rgba(111,206,184,.18); pointer-events:none; animation: waterBubble 3.2s ease-in-out infinite; }
+      .water-box::before { width: 42px; height: 42px; right: 20px; bottom: -14px; }
+      .water-box::after { width: 18px; height: 18px; right: 78px; bottom: 8px; animation-delay: -1.4s; }
+      .water-head { display:flex; align-items:center; justify-content:space-between; gap:10px; position:relative; z-index:1; }
+      .water-head h2 { margin:0; font-size:1rem; }
+      .water-close { border:0; background:transparent; font-size:18px; cursor:pointer; padding:4px 8px; border-radius:10px; }
+      .water-close:hover { background: rgba(0,0,0,.05); }
+      .water-copy { margin:6px 0 10px; font-size:.86rem; position:relative; z-index:1; }
+      .water-progress { height:8px; border-radius:999px; overflow:hidden; background:rgba(0,0,0,.08); margin:8px 0 12px; position:relative; z-index:1; }
+      .water-progress i { display:block; height:100%; width:0%; background:linear-gradient(90deg,#76c7ff,#7ee6b0); transition:width .25s ease; }
+      .water-actions { display:flex; gap:6px; flex-wrap:wrap; position:relative; z-index:1; }
+      .water-actions .btn { min-width:0; padding:7px 10px; font-size:.8rem; }
+      @keyframes waterPop { from { opacity:0; transform:translateY(12px) scale(.96); } to { opacity:1; transform:translateY(0) scale(1); } }
+      @keyframes waterBubble { 0%,100% { transform:translateY(0) scale(1); opacity:.45; } 50% { transform:translateY(-18px) scale(1.12); opacity:.8; } }
     </style>
 
       <div class="shell">
@@ -261,17 +271,19 @@ function render() {
 
       <div class="toast pink">💗 i miss “us”</div>
       <div class="toast yellow">🍈 fresh focus fuel 🍈</div>
-      <div class="water-reminder" id="waterReminder" role="dialog" aria-modal="true" aria-labelledby="waterTitle">
+      <div class="water-reminder" id="waterReminder" role="dialog" aria-labelledby="waterTitle">
         <div class="water-box">
-          <h2 id="waterTitle">💧 Water break</h2>
-          <p>Time for a water break. Today's target: <b>4.0 L</b>.</p>
-          <strong id="waterAmount">0.0 L / 4.0 L</strong>
+          <div class="water-head">
+            <h2 id="waterTitle">💧 Water check</h2>
+            <button class="water-close" id="waterClose" type="button" aria-label="Close water reminder">×</button>
+          </div>
+          <p class="water-copy">Take a few sips and log them. <b id="waterAmount">0.00 L / 4.0 L</b></p>
           <div class="water-progress"><i id="waterBar"></i></div>
           <div class="water-actions">
-            <button class="btn primary" id="water250">+250 ml</button>
-            <button class="btn primary" id="water500">+500 ml</button>
-            <button class="btn" id="water1000">+1 L</button>
-            <button class="btn" id="waterClose">Remind me later</button>
+            <button class="btn primary" id="water250" type="button">+250 ml</button>
+            <button class="btn primary" id="water500" type="button">+500 ml</button>
+            <button class="btn" id="water1000" type="button">+1 L</button>
+            <button class="btn" id="waterClose2" type="button">Later</button>
           </div>
         </div>
       </div>
@@ -324,7 +336,7 @@ async function loadCloud(initial = false) {
     timer.running = !!cloud.progress?.timer_running;
     timer.seconds = Number(cloud.progress?.timer_seconds || 0);
     timer.startedAt = cloud.progress?.timer_started_at
-      ? new Date(cloud.progress.timer_started_at).getTime() - timer.seconds * 1000
+      ? new Date(cloud.progress.timer_started_at).getTime()
       : null;
     save();
     cloud.ready = true;
@@ -424,7 +436,7 @@ function subscribeToCloud() {
         timer.running = !!payload.new.timer_running;
         timer.seconds = Number(payload.new.timer_seconds || 0);
         timer.startedAt = payload.new.timer_started_at
-          ? new Date(payload.new.timer_started_at).getTime() - timer.seconds * 1000
+          ? new Date(payload.new.timer_started_at).getTime()
           : null;
         save();
         updateVisibleCloudUI();
@@ -461,12 +473,29 @@ function formatTimer(seconds) {
   return `${h}:${m}:${s}`;
 }
 
+let timerHeartbeatBusy = false;
+setInterval(async () => {
+  if (!timer.running || !cloud.ready || timerHeartbeatBusy) return;
+  timerHeartbeatBusy = true;
+  try {
+    timer.seconds = Math.max(0, Math.floor((Date.now() - timer.startedAt) / 1000));
+    await saveTimerState();
+  } catch (error) {
+    console.error('Timer heartbeat sync failed:', error);
+  } finally {
+    timerHeartbeatBusy = false;
+  }
+}, 5000);
+
 async function saveTimerState() {
   const { data, error } = await supabase.from('progress').update({
     timer_running: timer.running,
     timer_started_at: timer.startedAt ? new Date(timer.startedAt).toISOString() : null,
     timer_seconds: timer.seconds,
     sessions: day().sessions,
+    plans: state.plans,
+    note: state.note,
+    progress_date: today(),
     updated_at: new Date().toISOString()
   }).eq('id', 1).select('id,focus_minutes,progress_date,updated_at,plans,note,sessions,timer_running,timer_started_at,timer_seconds').single();
   if (error) throw error;
@@ -475,7 +504,9 @@ async function saveTimerState() {
 
 function getWaterState() {
   const key = `atul_water_${today()}`;
-  const raw = JSON.parse(localStorage.getItem(key) || 'null') || { ml: 0, lastReminder: 0 };
+  let raw = null;
+  try { raw = JSON.parse(localStorage.getItem(key) || 'null'); } catch (_) {}
+  raw = raw && typeof raw === 'object' ? raw : { ml: 0, lastReminder: 0 };
   raw.ml = Math.max(0, Math.min(4000, Number(raw.ml) || 0));
   raw.lastReminder = Number(raw.lastReminder) || 0;
   return { key, data: raw };
@@ -506,37 +537,34 @@ function showWaterReminder() {
 }
 
 function closeWaterReminder() {
-  const popup = document.getElementById('waterReminder');
-  if (popup) popup.classList.remove('show');
+  document.getElementById('waterReminder')?.classList.remove('show');
 }
 
 function addWater(ml) {
+  const amount = Math.max(1, Number(ml) || 0);
   const { key, data } = getWaterState();
-  data.ml = Math.min(4000, data.ml + ml);
+  data.ml = Math.min(4000, data.ml + amount);
   data.lastReminder = Date.now();
   localStorage.setItem(key, JSON.stringify(data));
   updateWaterPopup();
   if (data.ml >= 4000) {
+    closeWaterReminder();
     alert('💧 4.0 L reached for today. Water reminders are finished for today.');
   }
 }
 
 function startWaterReminderSystem() {
-  const { data } = getWaterState();
-  if (data.ml >= 4000) return;
-  const oneHour = 60 * 60 * 1000;
   const maybeRemind = () => {
-    const current = getWaterState().data;
-    if (current.ml >= 4000) return;
-    if (!current.lastReminder || Date.now() - current.lastReminder >= oneHour) {
-      current.lastReminder = Date.now();
-      const { key } = getWaterState();
-      localStorage.setItem(key, JSON.stringify(current));
+    const { key, data } = getWaterState();
+    if (data.ml >= 4000) return;
+    if (!data.lastReminder || Date.now() - data.lastReminder >= 60 * 60 * 1000) {
+      data.lastReminder = Date.now();
+      localStorage.setItem(key, JSON.stringify(data));
       showWaterReminder();
     }
   };
+  setTimeout(maybeRemind, 60 * 60 * 1000);
   setInterval(maybeRemind, 60 * 1000);
-  setTimeout(maybeRemind, oneHour);
 }
 
 function wireWaterReminder() {
@@ -544,6 +572,7 @@ function wireWaterReminder() {
   document.getElementById('water500')?.addEventListener('click', () => addWater(500));
   document.getElementById('water1000')?.addEventListener('click', () => addWater(1000));
   document.getElementById('waterClose')?.addEventListener('click', closeWaterReminder);
+  document.getElementById('waterClose2')?.addEventListener('click', closeWaterReminder);
   updateWaterPopup();
   startWaterReminderSystem();
 }
