@@ -49,6 +49,7 @@ let state = JSON.parse(localStorage.getItem(KEY) || 'null') || {
 
 let timer = { running: false, seconds: 0, startedAt: null };
 let cloud = { progress: null, posts: [], ready: false };
+let currentView = 'today';
 
 const save = () => localStorage.setItem(KEY, JSON.stringify(state));
 
@@ -130,7 +131,7 @@ function render() {
       </nav>
 
       <main>
-        <section id="today" class="view active">
+        <section id="today" class="view${currentView === 'today' ? ' active' : ''}">
           <div class="stats">
             <article class="card">
               <small>TODAY'S FOCUS</small>
