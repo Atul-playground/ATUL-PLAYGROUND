@@ -185,11 +185,15 @@ function wire() {
 }
 
 function addBlock(time='', title='Focus block') {
+  const blocks = document.getElementById('blocks');
+  if (!blocks) return;
+
   const el = document.createElement('div');
   el.className = 'block';
   el.innerHTML = `<input class="bt" placeholder="Time" value="${time}"><input class="bn" placeholder="Block name" value="${title}"><button class="btn danger remove">Remove</button>`;
+
   el.querySelector('.remove').onclick = () => el.remove();
-  document.getElementById('blocks').appendChild(el);
+  blocks.appendChild(el);
 }
 
 function pushPost(text,img) {
@@ -243,14 +247,4 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
-addBlock('05:30–08:00','Focus');
-addBlock('08:00–08:30','Breakfast');
-addBlock('08:30–11:00','Focus');
-addBlock('11:00–11:30','Break');
-addBlock('11:30–13:30','Focus');
-addBlock('13:30–14:00','Lunch');
-addBlock('14:00–17:00','Sleep / recovery');
-addBlock('17:30–20:00','Focus');
-addBlock('20:00–20:30','Dinner');
-addBlock('20:30–23:00','Focus');
 render();
