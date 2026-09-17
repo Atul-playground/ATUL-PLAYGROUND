@@ -52,6 +52,8 @@ let serverClockOffsetMs = 0;
 let cloud = { progress: null, posts: [], ready: false, loading: false };
 let currentView = 'today';
 let selectedScheduleDate = today();
+let scheduleEditorDirty = false;
+let timerActionBusy = false;
 
 const save = () => localStorage.setItem(KEY, JSON.stringify(state));
 
@@ -330,7 +332,7 @@ async function loadCloud(initial = false) {
     }
 
     cloud.posts = posts || [];
-    if (cloud.progress?.plans) state.plans = cloud.progress.plans || {};
+    if (cloud.progress?.plans && !scheduleEditorDirty) state.plans = cloud.progress.plans || {};
     if (typeof cloud.progress?.note === 'string') state.note = cloud.progress.note;
     state.days[today()] ||= { focus: 0, sessions: 0 };
     state.days[today()].sessions = Number(cloud.progress?.sessions || 0);
@@ -682,30 +684,47 @@ function wire() {
   });
 
   document.getElementById('start').onclick = async () => {
-    await syncServerClock();
-    await refreshTimerFromCloud();
-    if (timer.running) return;
-    const secondsAtStart = Math.max(0, Number(timer.seconds) || 0);
+    if (timerActionBusy || timer.running) return;
+    timerActionBusy = true;
+    const button = document.getElementById('start');
+    if (button) button.disabled = true;
     try {
-      await startSharedTimer();
+      await syncServerClock();
+      const secondsAtStart = Math.max(0, Number(timer.seconds) || 0);
+      timer.running = true;
+      timer.startedAt = sharedNow() - secondsAtStart * 1000;
+      await saveTimerState();
       updateSharedTimerUI();
     } catch (error) {
-      console.error(error);
-      alert('Could not start the shared timer. Check the Supabase setup.');
+      timer.running = false;
+      timer.startedAt = null;
+      console.error('Start timer failed:', error);
+      alert(`Could not start the timer: ${error.message || error}`);
+    } finally {
+      timerActionBusy = false;
+      if (button) button.disabled = false;
     }
   };
 
   document.getElementById('pause').onclick = async () => {
-    await syncServerClock();
-    await refreshTimerFromCloud();
-    if (!timer.running) return;
-    const seconds = Math.max(0, Math.floor((sharedNow() - timer.startedAt) / 1000));
+    if (timerActionBusy || !timer.running) return;
+    timerActionBusy = true;
+    const button = document.getElementById('pause');
+    if (button) button.disabled = true;
     try {
-      await pauseSharedTimer(seconds);
+      await syncServerClock();
+      const seconds = Math.max(0, Math.floor((sharedNow() - timer.startedAt) / 1000));
+      timer.running = false;
+      timer.seconds = seconds;
+      timer.startedAt = null;
+      await saveTimerState();
       updateSharedTimerUI();
     } catch (error) {
-      console.error(error);
-      alert('Could not pause the shared timer. Check the Supabase setup.');
+      console.error('Pause timer failed:', error);
+      alert(`Could not pause the timer: ${error.message || error}`);
+    } finally {
+      timerActionBusy = false;
+      if (button) button.disabled = false;
     }
   };
 
@@ -777,6 +796,7 @@ function wire() {
 
     save();
     saveSharedState().then(() => {
+      scheduleEditorDirty = false;
       renderTodayTimeline();
       renderCalendar();
       alert(`Schedule saved for ${formatDate(date)}.`);
@@ -869,6 +889,7 @@ function addBlock(time = '', title = 'Focus block', done = false) {
 
   el.querySelector('.remove').onclick = () => el.remove();
   blocks.appendChild(el);
+  el.querySelectorAll('input').forEach(input => input.addEventListener('input', () => { scheduleEditorDirty = true; }));
 }
 
 function renderTodayTimeline() {
